@@ -1,9 +1,11 @@
 import unittest
+from unittest.mock import patch
 import pandas as pd
 import stratum as st
 import numpy as np
 from sklearn.dummy import DummyRegressor
-from stratum.optimizer.ir._numeric_ops import NumericOp, NumericOpType
+from stratum.optimizer.ir._numeric_ops import NumericOp, NumericOpType, make_binary_numeric_op
+from stratum.optimizer.ir._ops import CallOp, DATA_OP_PLACEHOLDER
 from stratum.optimizer._optimize import optimize
 
 class TestNumericOps(unittest.TestCase):
@@ -150,14 +152,63 @@ class TestNumericOps(unittest.TestCase):
         self.assertIsInstance(out[1], NumericOp)
         self.assertEqual(out[1].type, NumericOpType.DIVIDE)
 
-    def test_no_extract_var_var(self):
-        """BinOp(var + var) must not be converted — keep as BinOp."""
+    def test_process_add_var_var(self):
+        op = NumericOp([], [], type=NumericOpType.ADD, opt_operand=DATA_OP_PLACEHOLDER, reversed=False)
+        self.assertIsNone(op.constant)
+        result = op.process("fit", {}, [np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0])])
+        np.testing.assert_array_almost_equal(result, np.array([5.0, 7.0, 9.0]))
+
+    def test_process_subtract_var_var(self):
+        op = NumericOp([], [], type=NumericOpType.SUBTRACT, opt_operand=DATA_OP_PLACEHOLDER, reversed=False)
+        result = op.process("fit", {}, [np.array([10.0, 9.0, 8.0]), np.array([1.0, 2.0, 3.0])])
+        np.testing.assert_array_almost_equal(result, np.array([9.0, 7.0, 5.0]))
+
+    def test_process_multiply_var_var(self):
+        op = NumericOp([], [], type=NumericOpType.MULTIPLY, opt_operand=DATA_OP_PLACEHOLDER, reversed=False)
+        result = op.process("fit", {}, [np.array([1.0, 2.0, 3.0]), np.array([4.0, 5.0, 6.0])])
+        np.testing.assert_array_almost_equal(result, np.array([4.0, 10.0, 18.0]))
+
+    def test_process_divide_var_var(self):
+        op = NumericOp([], [], type=NumericOpType.DIVIDE, opt_operand=DATA_OP_PLACEHOLDER, reversed=False)
+        result = op.process("fit", {}, [np.array([6.0, 8.0, 9.0]), np.array([2.0, 4.0, 3.0])])
+        np.testing.assert_array_almost_equal(result, np.array([3.0, 2.0, 3.0]))
+
+    def _assert_var_var_extracted(self, out, numeric_type):
+        ops = [op for op in out if isinstance(op, NumericOp) and op.type == numeric_type]
+        self.assertEqual(len(ops), 1)
+        op = ops[0]
+        self.assertIs(op.opt_operand, DATA_OP_PLACEHOLDER)
+        self.assertIsNone(op.constant)
+        self.assertFalse(op.reversed)
+        return op
+
+    def test_extract_binop_add_var_var(self):
         df1 = st.as_data_op(2)
         df2 = st.as_data_op(3)
-        t1 = df1 + df2
-        out, *_ = optimize(t1)
-        binary_ops = [op for op in out if isinstance(op, NumericOp) and op.type == NumericOpType.ADD]
-        self.assertEqual(len(binary_ops), 0)
+        out, *_ = optimize(df1 + df2)
+        op = self._assert_var_var_extracted(out, NumericOpType.ADD)
+        self.assertEqual(op.process("fit", {}, [2, 3]), 5)
+
+    def test_extract_binop_subtract_var_var(self):
+        df1 = st.as_data_op(10)
+        df2 = st.as_data_op(3)
+        out, *_ = optimize(df1 - df2)
+        op = self._assert_var_var_extracted(out, NumericOpType.SUBTRACT)
+        self.assertEqual(op.process("fit", {}, [10, 3]), 7)
+
+    def test_extract_binop_multiply_var_var(self):
+        df1 = st.as_data_op(4)
+        df2 = st.as_data_op(5)
+        out, *_ = optimize(df1 * df2)
+        op = self._assert_var_var_extracted(out, NumericOpType.MULTIPLY)
+        self.assertEqual(op.process("fit", {}, [4, 5]), 20)
+
+    def test_extract_binop_divide_var_var(self):
+        df1 = st.as_data_op(12)
+        df2 = st.as_data_op(4)
+        out, *_ = optimize(df1 / df2)
+        op = self._assert_var_var_extracted(out, NumericOpType.DIVIDE)
+        self.assertEqual(op.process("fit", {}, [12, 4]), 3.0)
 
     def test_extract_add_produces_correct_result(self):
         df = st.as_data_op(5)
@@ -182,41 +233,33 @@ class TestNumericOps(unittest.TestCase):
         mul_ops = [op for op in out if isinstance(op, NumericOp) and op.type == NumericOpType.MULTIPLY]
         self.assertEqual(len(mul_ops), 1)
 
-    def test_no_extract_np_add_var_var(self):
-        """apply_func(np.add, var) with two DataOp inputs must not produce a binary NumericOp."""
+    def test_extract_callop_add_var_var(self):
         df1 = st.as_data_op(2)
         df2 = st.as_data_op(3)
-        t1 = df1.skb.apply_func(np.add, df2)
-        out, *_ = optimize(t1)
-        binary_ops = [op for op in out if isinstance(op, NumericOp) and op.type == NumericOpType.ADD]
-        self.assertEqual(len(binary_ops), 0)
+        out, *_ = optimize(df1.skb.apply_func(np.add, df2))
+        op = self._assert_var_var_extracted(out, NumericOpType.ADD)
+        self.assertEqual(op.process("fit", {}, [2, 3]), 5)
 
-    def test_no_extract_np_subtract_var_var(self):
-        """apply_func(np.subtract, var) with two DataOp inputs must not produce a binary NumericOp."""
+    def test_extract_callop_subtract_var_var(self):
         df1 = st.as_data_op(5)
         df2 = st.as_data_op(3)
-        t1 = df1.skb.apply_func(np.subtract, df2)
-        out, *_ = optimize(t1)
-        binary_ops = [op for op in out if isinstance(op, NumericOp) and op.type == NumericOpType.SUBTRACT]
-        self.assertEqual(len(binary_ops), 0)
+        out, *_ = optimize(df1.skb.apply_func(np.subtract, df2))
+        op = self._assert_var_var_extracted(out, NumericOpType.SUBTRACT)
+        self.assertEqual(op.process("fit", {}, [5, 3]), 2)
 
-    def test_no_extract_np_multiply_var_var(self):
-        """apply_func(np.multiply, var) with two DataOp inputs must not produce a binary NumericOp."""
+    def test_extract_callop_multiply_var_var(self):
         df1 = st.as_data_op(2)
         df2 = st.as_data_op(3)
-        t1 = df1.skb.apply_func(np.multiply, df2)
-        out, *_ = optimize(t1)
-        binary_ops = [op for op in out if isinstance(op, NumericOp) and op.type == NumericOpType.MULTIPLY]
-        self.assertEqual(len(binary_ops), 0)
+        out, *_ = optimize(df1.skb.apply_func(np.multiply, df2))
+        op = self._assert_var_var_extracted(out, NumericOpType.MULTIPLY)
+        self.assertEqual(op.process("fit", {}, [2, 3]), 6)
 
-    def test_no_extract_np_divide_var_var(self):
-        """apply_func(np.divide, var) with two DataOp inputs must not produce a binary NumericOp."""
+    def test_extract_callop_divide_var_var(self):
         df1 = st.as_data_op(6)
         df2 = st.as_data_op(2)
-        t1 = df1.skb.apply_func(np.divide, df2)
-        out, *_ = optimize(t1)
-        binary_ops = [op for op in out if isinstance(op, NumericOp) and op.type == NumericOpType.DIVIDE]
-        self.assertEqual(len(binary_ops), 0)
+        out, *_ = optimize(df1.skb.apply_func(np.divide, df2))
+        op = self._assert_var_var_extracted(out, NumericOpType.DIVIDE)
+        self.assertEqual(op.process("fit", {}, [6, 2]), 3.0)
 
     def test_extract_subtract_const_var_produces_correct_result(self):
         df = st.as_data_op(3)
@@ -234,9 +277,37 @@ class TestNumericOps(unittest.TestCase):
 
     def test_make_binary_numeric_op_raises_on_invalid_args(self):
         """make_binary_numeric_op must raise ValueError when neither or both args are placeholders."""
-        from stratum.optimizer.ir._numeric_ops import make_binary_numeric_op
-        from stratum.optimizer.ir._ops import CallOp
         op = CallOp(func=np.add, args=None)
         op.args = (1.0, 2.0)  # neither arg is DATA_OP_PLACEHOLDER
         with self.assertRaises(ValueError):
             make_binary_numeric_op(op, NumericOpType.ADD)
+
+    def test_init_generic_type_requires_func(self):
+        with self.assertRaises(ValueError):
+            NumericOp(type=NumericOpType.GENERIC)
+
+    def test_init_requires_func_or_type(self):
+        with self.assertRaises(ValueError):
+            NumericOp()
+
+    def test_process_unsupported_binary_type(self):
+        op = NumericOp([], [], type=NumericOpType.ADD, constant=1.0)
+        op.type = "fake_binary"
+        with patch("stratum.optimizer.ir._numeric_ops._BINARY_TYPES", frozenset({"fake_binary"})):
+            with self.assertRaises(ValueError):
+                op.process("fit", {}, [1.0])
+
+    def test_make_binary_numeric_op_raises_on_non_pair_args(self):
+        op = CallOp(func=np.add, args=None)
+        op.args = (DATA_OP_PLACEHOLDER,)
+        with self.assertRaises(ValueError):
+            make_binary_numeric_op(op, NumericOpType.ADD)
+
+    def test_make_binary_numeric_op_const_var(self):
+        op = CallOp(func=np.subtract, args=None)
+        op.args = (10, DATA_OP_PLACEHOLDER)
+        result = make_binary_numeric_op(op, NumericOpType.SUBTRACT)
+        self.assertEqual(result.constant, 10)
+        self.assertTrue(result.reversed)
+        self.assertIsNone(result.opt_operand)
+        self.assertEqual(result.process("fit", {}, [3]), 7)

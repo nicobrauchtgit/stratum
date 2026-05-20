@@ -29,46 +29,32 @@ _NUMPY_BINARY_MAP = {
     np.divide: NumericOpType.DIVIDE,
 }
 
+_NUMPY_UNARY_MAP = {
+    np.log: NumericOpType.LOG,
+    np.exp: NumericOpType.EXP,
+    np.sqrt: NumericOpType.SQRT,
+    np.abs: NumericOpType.ABS,
+    np.square: NumericOpType.SQUARE,
+}
+
+_UNARY_NUMPY_FUNCS = frozenset(_NUMPY_UNARY_MAP.keys())
 _BINARY_TYPES = frozenset(_ARITH_OP_MAP.values())
 _BINARY_NUMPY_FUNCS = frozenset(_NUMPY_BINARY_MAP.keys())
 
 class NumericOp(Op):
-    fields = ["func", "args", "kwargs", "type", "constant", "reversed"]
+    fields = ["func", "args", "kwargs", "type", "constant", "opt_operand", "reversed"]
     func = None
 
-    def __init__(self, inputs=None, outputs=None, func=None, args=(), kwargs=None, type: NumericOpType = None, constant=None, reversed=False):
+    def __init__(self, inputs=None, outputs=None, func=None, args=(), kwargs=None, type: NumericOpType = None, constant=None, opt_operand=None, reversed=False):
         if func is not None:
-            if func is np.log:
-                self.type = NumericOpType.LOG
-                name = "log"
-            elif func is np.exp:
-                self.type = NumericOpType.EXP
-                name = "exp"
-            elif func is np.sqrt:
-                self.type = NumericOpType.SQRT
-                name = "sqrt"
-            elif func is np.abs:
-                self.type = NumericOpType.ABS
-                name = "abs"
-            elif func is np.square:
-                self.type = NumericOpType.SQUARE
-                name = "square"
-            elif func is np.add:
-                self.type = NumericOpType.ADD
-                name = "add"
-            elif func is np.subtract:
-                self.type = NumericOpType.SUBTRACT
-                name = "subtract"
-            elif func is np.multiply:
-                self.type = NumericOpType.MULTIPLY
-                name = "multiply"
-            elif func is np.divide:
-                self.type = NumericOpType.DIVIDE
-                name = "divide"
-            else:
+            self.type = _NUMPY_UNARY_MAP.get(func)
+            self.type = self.type if self.type else _NUMPY_BINARY_MAP.get(func)
+            if self.type is None:
                 self.type = NumericOpType.GENERIC
                 self.func = func
                 name = func.__name__
+            else:
+                name = self.type.value
         elif type is not None:
             if type == NumericOpType.GENERIC:
                 raise ValueError("GENERIC type requires a func")
@@ -81,6 +67,7 @@ class NumericOp(Op):
         self.args = args
         self.kwargs = kwargs or {}
         self.constant = constant
+        self.opt_operand = opt_operand
         self.reversed = reversed
 
     def process(self, mode: str, environment: dict, inputs: list):
@@ -97,7 +84,9 @@ class NumericOp(Op):
         elif self.type == NumericOpType.SQUARE:
             return np.square(inputs[0])
         elif self.type in _BINARY_TYPES:
-            left, right = (self.constant, inputs[0]) if self.reversed else (inputs[0], self.constant)
+            primary = inputs[0]
+            operand = inputs[1] if self.opt_operand is DATA_OP_PLACEHOLDER else self.constant
+            left, right = (operand, primary) if self.reversed else (primary, operand)
             if self.type == NumericOpType.ADD:
                 return np.add(left, right)
             elif self.type == NumericOpType.SUBTRACT:
@@ -112,30 +101,30 @@ class NumericOp(Op):
             raise ValueError(f"Unsupported numeric operation type: {self.type}")
 
 
-def make_numeric_op(op: CallOp) -> NumericOp:
+def make_unary_numeric_op(op: CallOp) -> NumericOp:
     remaining_args = op.args[1:]
     return NumericOp(func=op.func, args=remaining_args, kwargs=op.kwargs, inputs=op.inputs, outputs=op.outputs)
 
 def make_binary_numeric_op(op: CallOp, type: NumericOpType) -> NumericOp:
     args = op.args or ()
-    if len(args) == 2 and args[0] is DATA_OP_PLACEHOLDER:
-        constant, reversed = args[1], False
-    elif len(args) == 2 and args[1] is DATA_OP_PLACEHOLDER:
-        constant, reversed = args[0], True
-    else:
-        raise ValueError(                                                                                                                                        
-            f"make_binary_numeric_op called with args that are not a single-placeholder pair: {args}"                                                          
-        )      
-    return NumericOp(type=type, constant=constant, reversed=reversed, inputs=op.inputs, outputs=op.outputs)
-
-
-def _is_binary_extractable(op: CallOp) -> bool:
-    args = op.args or ()
     if len(args) != 2:
-        return False
+        raise ValueError(
+            f"make_binary_numeric_op called with args that are not a pair: {args}"
+        )
     l_ph = args[0] is DATA_OP_PLACEHOLDER
     r_ph = args[1] is DATA_OP_PLACEHOLDER
-    return l_ph != r_ph
+    if l_ph and r_ph:
+        extra = dict(opt_operand=DATA_OP_PLACEHOLDER, reversed=False)
+    elif l_ph:
+        extra = dict(constant=args[1], reversed=False)
+    elif r_ph:
+        extra = dict(constant=args[0], reversed=True)
+    else:
+        raise ValueError(
+            f"make_binary_numeric_op called with args that have no placeholder: {args}"
+        )
+    return NumericOp(type=type, inputs=op.inputs, outputs=op.outputs, **extra)
+
 
 def extract_numeric_op(op: Op, root: Op) -> tuple[Op, bool]:
     new_op = None
@@ -144,31 +133,28 @@ def extract_numeric_op(op: Op, root: Op) -> tuple[Op, bool]:
     elif isinstance(op, BinOp) and op.op in _ARITH_OP_MAP:
         l_ph = op.left is DATA_OP_PLACEHOLDER
         r_ph = op.right is DATA_OP_PLACEHOLDER
-        if l_ph != r_ph:  # var op const or const op var, not var op var
-            constant = op.right if l_ph else op.left
+        extra = None
+        if l_ph and r_ph:
+            extra = dict(opt_operand=DATA_OP_PLACEHOLDER, reversed=False)
+        elif l_ph:
+            extra = dict(constant=op.right, reversed=False)
+        elif r_ph:
+            extra = dict(constant=op.left, reversed=True)
+        if extra is not None:
             new_op = NumericOp(
                 type=_ARITH_OP_MAP[op.op],
-                constant=constant,
-                reversed=not l_ph,  # True when const is on the left
                 inputs=op.inputs,
                 outputs=op.outputs,
+                **extra,
             )
     elif isinstance(op, CallOp):
-        if op.func is np.log:
-            new_op = make_numeric_op(op)
-        elif op.func is np.exp:
-            new_op = make_numeric_op(op)
-        elif op.func is np.sqrt:
-            new_op = make_numeric_op(op)
-        elif op.func is np.abs:
-            new_op = make_numeric_op(op)
-        elif op.func is np.square:
-            new_op = make_numeric_op(op)
-        elif op.func in _NUMPY_BINARY_MAP and _is_binary_extractable(op):
+        if op.func in _UNARY_NUMPY_FUNCS:
+            new_op = make_unary_numeric_op(op)
+        elif op.func in _NUMPY_BINARY_MAP:
             new_op = make_binary_numeric_op(op, _NUMPY_BINARY_MAP[op.func])
         # if op is some other function from np package, make a generic numeric op
         elif op.func.__module__ == "numpy" and op.func not in _BINARY_NUMPY_FUNCS:
-            new_op = make_numeric_op(op)
+            new_op = make_unary_numeric_op(op)
 
     if new_op is None:
         return root, False
