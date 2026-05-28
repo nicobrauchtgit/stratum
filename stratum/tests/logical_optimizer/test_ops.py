@@ -20,18 +20,6 @@ from stratum.optimizer.ir._ops import (
 from stratum.optimizer._optimize import optimize as optimize_
 
 
-def _inp(val):
-    """Helper: create an Op with a preset intermediate value."""
-    op = Op()
-    op.intermediate = val
-    return op
-
-
-def _inputs_for(op):
-    """Extract intermediate values from op.inputs."""
-    return [in_op.intermediate for in_op in op.inputs]
-
-
 class TestOpCloning(unittest.TestCase):
     def setUp(self):
         self.df = pd.DataFrame({"x": [1, 2, 3], "y": [4, 5, 6]})
@@ -117,7 +105,7 @@ class TestVariableOp(unittest.TestCase):
         cloned = op.clone()
         self.assertIsNot(op, cloned)
         self.assertEqual(cloned.name, "x")
-        result = op.process("fit_transform", {"x": 123}, _inputs_for(op))
+        result = op.process("fit_transform", {"x": 123}, [])
         self.assertEqual(result, 123)
 
 
@@ -136,8 +124,7 @@ class TestImplOp(unittest.TestCase):
         mock_dataop = MagicMock(spec=DataOp)
         cls = type("Impl", (), {"_fields": ["x", "y", "z"], "x": mock_dataop, "y": [mock_dataop, 5], "z": {"k": mock_dataop}})
         op = ImplOp(name="test", skrub_impl=cls())
-        op.inputs = [_inp("vx"), _inp("vy"), _inp("vz")]
-        inputs = [in_op.intermediate for in_op in op.inputs]
+        inputs = ["vx", "vy", "vz"]
         ns = op.replace_fields_with_values(inputs)
         self.assertEqual(ns.x, "vx")
         self.assertEqual(ns.y[1], 5)
@@ -149,15 +136,13 @@ class TestImplOp(unittest.TestCase):
             val = yield mock_dataop
             return val * 2
         op = ImplOp(name="test", skrub_impl=SimpleNamespace(eval=fake_eval))
-        op.inputs = [_inp(10)]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [10])
         self.assertEqual(result, 20)
 
     def test_process_without_eval(self):
         cls = type("Impl", (), {"_fields": ["a"], "a": 42, "compute": lambda self, ns, mode, env: ns.a + 1})
         op = ImplOp(name="test", skrub_impl=cls())
-        op.inputs = []
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [])
         self.assertEqual(result, 43)
 
 
@@ -210,50 +195,42 @@ class TestUtilFunctions(unittest.TestCase):
 class TestOpProcess(unittest.TestCase):
     def test_method_call(self):
         op = MethodCallOp("upper", args=(), kwargs={})
-        op.inputs = [_inp("hello")]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, ["hello"])
         self.assertEqual(result, "HELLO")
 
     def test_method_call_with_placeholders(self):
         op = MethodCallOp("format", args=(DATA_OP_PLACEHOLDER,), kwargs={"end": DATA_OP_PLACEHOLDER})
-        op.inputs = [_inp("{0} {end}"), _inp("hello"), _inp("world")]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, ["{0} {end}", "hello", "world"])
         self.assertEqual(result, "hello world")
 
     def test_call_op(self):
         op = CallOp(func=lambda a, b: a + b, args=(DATA_OP_PLACEHOLDER, DATA_OP_PLACEHOLDER), kwargs={})
-        op.inputs = [_inp(3), _inp(7)]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [3, 7])
         self.assertEqual(result, 10)
 
     def test_getattr_dataframe_op(self):
         op = GetAttrOp(attr_name=["real", "imag"])
         op.is_dataframe_op = True
-        op.inputs = [_inp(1 + 2j)]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [1 + 2j])
         self.assertEqual(result, 0.0)
 
     def test_getattr_normal(self):
         op = GetAttrOp(attr_name="real")
-        op.inputs = [_inp(3 + 4j)]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [3 + 4j])
         self.assertEqual(result, 3.0)
 
     def test_getitem_with_placeholder(self):
         op = GetItemOp(key="dummy")
         op.key = DATA_OP_PLACEHOLDER
-        op.inputs = [_inp({"x": 42}), _inp("x")]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [{"x": 42}, "x"])
         self.assertEqual(result, 42)
 
     def test_binop_both_placeholders(self):
         op = BinOp(op=operator.add, left=DATA_OP_PLACEHOLDER, right=DATA_OP_PLACEHOLDER)
-        op.inputs = [_inp(10), _inp(20)]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [10, 20])
         self.assertEqual(result, 30)
 
     def test_binop_left_literal(self):
         op = BinOp(op=operator.mul, left=5, right=DATA_OP_PLACEHOLDER)
-        op.inputs = [_inp(3)]
-        result = op.process("fit_transform", {}, _inputs_for(op))
+        result = op.process("fit_transform", {}, [3])
         self.assertEqual(result, 15)
