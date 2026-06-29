@@ -11,31 +11,38 @@ def grid_search(dag: DataOp, cv=None, scoring=None, return_predictions=False, en
     """Perform grid search with cross-validation on a DataOp DAG."""
     t0 = perf_counter()
     #FIXME: Measure operator execution only if stats is enabled
-    show_stats = FLAGS.stats
-    stats_top_k = FLAGS.stats_top_k
     env_extra = env if env else {}
     env = dag.skb.get_data()
     for k, v in env_extra.items():
         env[k] = v
     linearized_dag, split_pos, flagged_ops = optimize(dag)
-    sched = SequentialScheduler(linearized_dag, split_pos, flagged_ops, show_stats, env=env, t0=t0)
+    sched = SequentialScheduler(linearized_dag, split_pos, flagged_ops, FLAGS.stats, env=env, t0=t0)
 
     preds = sched.grid_search(cv, scoring, return_predictions)
 
+    stats_printer(sched)
+
+    return (sched,preds) if return_predictions else sched
+
+
+def evaluate(dag: DataOp, seed: int = 42, test_size = 0.2):
+    """Evaluate a DataOp DAG with train/test split."""
+    linearized_dag, split_pos, flagged_ops = optimize(dag)
+    sched = SequentialScheduler(linearized_dag, split_pos, flagged_ops, FLAGS.stats, env=dag.skb.get_data())
+    out = sched.evaluate(seed, test_size)
+    stats_printer(sched)
+    return out
+
+
+def stats_printer(sched: SequentialScheduler):
+    # FIXME: Measure operator execution only if stats is enabled
     # Heavy hitters
-    if show_stats:
+    if FLAGS.stats:
         table = pd.DataFrame(sched.timings, columns=["Op", "time"])
         table = table.groupby("Op").aggregate(["sum", "count"])
         table.columns = ["Time", "Count"]
         table = table.reset_index().sort_values(by="Time", ascending=False)
         print("\n" + "=" * 80)
         print(f"Heavy hitters (sorted by time spent in DataOp evaluation):\n")
-        print(table.head(stats_top_k).to_string(index=False))
+        print(table.head(FLAGS.stats_top_k).to_string(index=False))
         print("=" * 80 + "\n")
-
-    return (sched,preds) if return_predictions else sched
-
-def evaluate(dag: DataOp, seed: int = 42, test_size = 0.2, cse: bool = False):
-    """Evaluate a DataOp DAG with train/test split."""
-    linearized_dag, split_pos, flagged_ops = optimize(dag)
-    return SequentialScheduler(linearized_dag, split_pos, flagged_ops).evaluate(seed, test_size)
