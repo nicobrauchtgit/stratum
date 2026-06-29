@@ -32,7 +32,9 @@ dependencies = [
     "pyarrow>=22.0.0",
     "pygments>=2.20.0",
     "urllib3>=2.7.0",
-    "idna>=3.15"
+    "idna>=3.15",
+    "duckdb>=1.5.4",
+    "numexpr>=2.14.1",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +48,7 @@ test = [
 benchmark = [
 ]
 dev = [
+    "ipykernel>=7.3.0",
 ]
 
 [project.urls]
