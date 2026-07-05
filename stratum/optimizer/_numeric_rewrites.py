@@ -111,3 +111,8 @@ eliminate_identity_operation = rewrite_pass(
     match_identity_operation(NumericOp, NumericOpType.MULTIPLY, 1),
     eliminate_single_op_chain_root_safe,
 )
+
+eliminate_abs_abs = rewrite_pass(
+    match_two_op_chain(NumericOp, NumericOpType.ABS, NumericOpType.ABS),
+    _replace_with_abs,
+)
