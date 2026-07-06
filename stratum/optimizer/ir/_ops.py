@@ -8,6 +8,7 @@ from sklearn import clone
 from sklearn.base import BaseEstimator
 from skrub._data_ops._choosing import Choice
 from skrub._data_ops._data_ops import DataOp, Apply, Value, CallMethod, Call, GetAttr, GetItem, BinOp as SkrubBinOp, Concat, Var, _wrap_estimator
+from skrub._utils import PassThrough
 from skrub.selectors._base import All
 from pandas import DataFrame
 from polars import DataFrame as PlDataFrame, Series as PlSeries
@@ -746,6 +747,71 @@ def _bind_or_value(binder: OperandBinder, value):
     return binder.ref(value) if isinstance(value, DataOp) else value
 
 
+def _apply_estimator_op(impl: Apply, estimator, ids_to_ops: dict) -> Op:
+    """Build the TransformerOp/EstimatorOp for one concrete estimator of an Apply impl.
+
+    ``estimator`` is ``impl.estimator`` itself, or one outcome of it when the
+    Apply's estimator is a ``Choice``. Each call uses its own binder so every op
+    gets X as OperandRef(0) and its own de-duplicated inputs list.
+    """
+    if estimator is None or (isinstance(estimator, str) and estimator == "passthrough"):
+        # Same normalization skrub's _wrap_estimator applies at fit time; needed
+        # here already because BaseEstimatorOp clones its estimator on construction.
+        estimator = PassThrough()
+    estimator_class = EstimatorOp if hasattr(estimator, "predict") else TransformerOp
+    binder = OperandBinder(ids_to_ops)
+    binder.ref(impl.X)  # OperandRef(0)
+    param_refs = {k: binder.ref(v) for k, v in estimator.get_params().items()
+                  if isinstance(v, DataOp) and id(v) in ids_to_ops}
+    y = _bind_or_value(binder, impl.y)
+    cols = _bind_or_value(binder, impl.cols)
+    op = estimator_class(
+        estimator=estimator,
+        y=y,
+        cols=cols,
+        how=impl.how,
+        allow_reject=impl.allow_reject,
+        unsupervised=impl.unsupervised,
+        kwargs={},
+        param_refs=param_refs,
+    )
+    op.inputs = binder.inputs
+    return op
+
+
+def _outcome_display(estimator) -> str:
+    """Human-readable label for an estimator outcome (None/'passthrough' -> PassThrough)."""
+    if estimator is None or (isinstance(estimator, str) and estimator == "passthrough"):
+        return PassThrough.__name__
+    return type(estimator).__name__
+
+
+def _flatten_estimator_choice(choice: Choice):
+    """Flatten an estimator ``Choice`` (possibly nesting further Choices) into leaves.
+
+    Yields ``(name_path, estimator)`` per leaf estimator, where ``name_path`` is a
+    list of ``(choice_name, value)`` pairs -- ChoiceOp's internal ``outcome_names``
+    representation -- so a nested choice collapses into a single flat ChoiceOp over
+    all leaf estimators, matching how skrub expands its parameter grid. An
+    intermediate (nested) choice only contributes to the path when its outcome is
+    named; the leaf always contributes its outcome name or estimator class name.
+    """
+    for i, outcome in enumerate(choice.outcomes):
+        label = choice.outcome_names[i] if choice.outcome_names is not None else None
+        if isinstance(outcome, Choice):
+            prefix = [(choice.name, label)] if label is not None else []
+            for sub_path, est in _flatten_estimator_choice(outcome):
+                yield prefix + sub_path, est
+        elif isinstance(outcome, DataOp):
+            raise NotImplementedError(
+                "Apply with a Choice estimator only supports concrete estimator "
+                "(or None/'passthrough') outcomes; DataOp outcomes are not "
+                f"supported (choice {choice.name!r}).")
+        else:
+            value = label if label is not None else _outcome_display(outcome)
+            yield [(choice.name, value)], outcome
+
+
 def as_op(data_op: DataOp, ids_to_ops: dict, env: dict | None = None) -> Op:
     """Convert a single skrub DataOp into an Op, building its de-duplicated
     ``inputs`` list and operand references in one canonical field walk.
@@ -806,23 +872,23 @@ def as_op(data_op: DataOp, ids_to_ops: dict, env: dict | None = None) -> Op:
         return_op = BinOp(op=impl.op, left=left, right=right)
         return_op.inputs = binder.inputs
     elif isinstance(impl, Apply):
-        estimator_class = EstimatorOp if hasattr(impl.estimator, "predict") else TransformerOp
-        binder.ref(impl.X)  # OperandRef(0)
-        param_refs = {k: binder.ref(v) for k, v in impl.estimator.get_params().items()
-                      if isinstance(v, DataOp) and id(v) in ids_to_ops}
-        y = _bind_or_value(binder, impl.y)
-        cols = _bind_or_value(binder, impl.cols)
-        return_op = estimator_class(
-            estimator=impl.estimator,
-            y=y,
-            cols=cols,
-            how=impl.how,
-            allow_reject=impl.allow_reject,
-            unsupervised=impl.unsupervised,
-            kwargs={},
-            param_refs=param_refs,
-        )
-        return_op.inputs = binder.inputs
+        if isinstance(impl.estimator, Choice):
+            # An estimator choice expands to a ChoiceOp over one estimator op per
+            # outcome (mirroring Value(Choice) above), so choice unrolling and
+            # grid search work over the alternatives. Nested estimator choices are
+            # flattened into a single ChoiceOp over all leaf estimators; the leaf
+            # name paths use ChoiceOp's combi format so they concatenate correctly
+            # if choice_unrolling later combines this choice with a downstream one.
+            leaves = list(_flatten_estimator_choice(impl.estimator))
+            outcome_ops = [_apply_estimator_op(impl, est, ids_to_ops) for _, est in leaves]
+            for est_op in outcome_ops:
+                # The trailing edge-wiring below only covers the returned op.
+                for in_op in est_op.inputs:
+                    in_op.add_output(est_op)
+            return_op = ChoiceOp(outcome_names=[path for path, _ in leaves],
+                                 append_choice_name=False, inputs=outcome_ops)
+        else:
+            return_op = _apply_estimator_op(impl, impl.estimator, ids_to_ops)
     elif isinstance(impl, Var):
         if env is not None and impl.name in env:
             # Resolve the variable to a compile-time constant; the runtime no
