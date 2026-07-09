@@ -116,3 +116,8 @@ eliminate_abs_abs = rewrite_pass(
     match_two_op_chain(NumericOp, NumericOpType.ABS, NumericOpType.ABS),
     _replace_with_abs,
 )
+
+eliminate_add_zero = rewrite_pass(
+    match_identity_operation(NumericOp, NumericOpType.ADD, 0),
+    eliminate_single_op_chain_root_safe,
+)
