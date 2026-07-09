@@ -576,6 +576,24 @@ class TestCSE(unittest.TestCase):
         out, *_ = optimize(t1)
         self.assertEqual(len(out), 2)                        # ValueOp + MUL survive
 
+    def test_div_by_one_nan_equivalence(self):
+        """nan / 1 must equal unoptimized result — identity holds for NaN."""
+        import math
+        df = st.as_data_op(float('nan'))
+        t1 = df / 1
+        out_opt, *_ = optimize(t1)
+        self.assertEqual(len(out_opt), 1)
+        self.assertTrue(math.isnan(out_opt[0].value))
+
+    def test_div_by_one_array_with_nan(self):
+        """array containing NaN: optimized and unoptimized produce identical results."""
+        arr = np.array([1.0, float('nan'), 3.0])
+        df = st.as_data_op(arr)
+        t1 = df / 1
+        out_opt, *_ = optimize(t1)
+        self.assertEqual(len(out_opt), 1)
+        np.testing.assert_array_equal(out_opt[0].value, arr)
+
     def test_eliminate_pow_by_one_fires(self):
         df = st.as_data_op(7)
         t1 = df ** 1
@@ -633,3 +651,145 @@ class TestCSE(unittest.TestCase):
 
         out, *_ = optimize(t1)
         self.assertEqual(out[0].value, -5)
+
+    def test_pow_by_one_nan_equivalence(self):
+        """nan ** 1 must equal unoptimized result — identity holds for NaN."""
+        import math
+        df = st.as_data_op(float('nan'))
+        t1 = df ** 1
+        out_opt, *_ = optimize(t1)
+        self.assertEqual(len(out_opt), 1)
+        self.assertTrue(math.isnan(out_opt[0].value))
+
+    def test_pow_by_one_array_with_nan(self):
+        """array containing NaN: rewrite fires and NaN is preserved."""
+        arr = np.array([1.0, float('nan'), 3.0])
+        df = st.as_data_op(arr)
+        t1 = df ** 1
+        out_opt, *_ = optimize(t1)
+        self.assertEqual(len(out_opt), 1)
+        np.testing.assert_array_equal(out_opt[0].value, arr)
+
+    def test_neg_neg_via_np_negative_apply_func(self):
+        df = st.as_data_op(5)
+        t1 = df.skb.apply_func(np.negative)
+        t2 = t1.skb.apply_func(np.negative)
+
+        out, *_ = optimize(t2)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].value, 5)
+
+    def test_neg_neg_end_to_end_negative_input(self):
+        """Numerical: -(-(-3)) trap — but we only collapse pairs, so (-(-3)) == 3."""
+        df = st.as_data_op(-3)
+        t1 = df.skb.apply_func(np.negative)
+        t2 = t1.skb.apply_func(np.negative)
+
+        out, *_ = optimize(t2)
+        self.assertEqual(out[0].value, -3)
+
+    def test_neg_neg_disabled(self):
+        df = st.as_data_op(5)
+        t1 = df.skb.apply_func(np.negative)
+        t2 = t1.skb.apply_func(np.negative)
+        config = OptConfig(
+            algebraic_rewrites=True,
+            algebraic_rewrite_config=AlgebraicRewritesConfig(neg_neg=False),
+        )
+        out, *_ = optimize(t2, config=config)
+        # ValueOp + 2 NumericOp(GENERIC, np.negative)
+        self.assertEqual(len(out), 3)
+
+    def test_no_rewrite_neg_alone(self):
+        """Single np.negative must not be rewritten."""
+        df = st.as_data_op(5)
+        t1 = df.skb.apply_func(np.negative)
+
+        out, *_ = optimize(t1)
+        self.assertEqual(len(out), 2)
+
+    def test_no_rewrite_neg_log(self):
+        """Different funcs in the chain must not match."""
+        df = st.as_data_op(5)
+        t1 = df.skb.apply_func(np.negative)
+        t2 = t1.skb.apply_func(np.log)
+
+        out, *_ = optimize(t2)
+        self.assertEqual(len(out), 3)
+
+    def test_neg_neg_with_trailing_op(self):
+        """Chain in the middle of a bigger DAG (root-safety of the reused helper)."""
+        df = st.as_data_op(5)
+        t1 = df.skb.apply_func(np.negative)
+        t2 = t1.skb.apply_func(np.negative)
+        t3 = t2.skb.apply_func(np.log)
+
+        out, *_ = optimize(t3)
+        # ValueOp + LOG (neg-neg collapsed)
+        self.assertEqual(len(out), 2)
+
+    def test_neg_neg_triple_chain_collapses_to_one(self):
+        """Odd-length chain: neg(neg(neg(x))) -> neg(x). Collapsing pairs from the
+        bottom up must leave exactly one negation and must not corrupt the DAG
+        (a naive top-down match re-processes a detached op and crashes here)."""
+        df = st.as_data_op(7)
+        t = df.skb.apply_func(np.negative)
+        t = t.skb.apply_func(np.negative)
+        t = t.skb.apply_func(np.negative)
+
+        out, *_ = optimize(t)
+        self.assertEqual(len(out), 2)                # ValueOp + one NumericOp(neg)
+        self.assertEqual(out[1].process("fit", [out[0].value]), -7)
+
+    def test_neg_neg_quad_chain_collapses_to_zero(self):
+        """Even-length chain: four negations cancel completely."""
+        df = st.as_data_op(7)
+        t = df.skb.apply_func(np.negative)
+        for _ in range(3):
+            t = t.skb.apply_func(np.negative)
+
+        out, *_ = optimize(t)
+        self.assertEqual(len(out), 1)                # ValueOp only
+        self.assertEqual(out[0].value, 7)
+
+    def test_neg_neg_five_chain_end_to_end(self):
+        """Longer odd chain: five negations reduce to one; value stays negated."""
+        df = st.as_data_op(3)
+        t = df.skb.apply_func(np.negative)
+        for _ in range(4):
+            t = t.skb.apply_func(np.negative)
+
+        out, *_ = optimize(t)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[1].process("fit", [out[0].value]), -3)
+
+    def test_direct_ufunc_call_not_matched(self):
+        """np.negative(np.negative(df)) converts to UnaryOp (not CallOp), so it
+        never extracts to GENERIC NumericOps and this rewrite must not touch it.
+        Pins the current boundary; the UnaryOp-canonicalization follow-up will
+        collapse this shape too."""
+        df = st.as_data_op(5)
+        t2 = np.negative(np.negative(df))
+
+        out, *_ = optimize(t2)
+        self.assertEqual(len(out), 3)                # ValueOp + 2 UnaryOps survive
+
+    def test_neg_neg_nan_equivalence(self):
+        """neg(neg(nan)) must equal unoptimized result — identity holds for NaN."""
+        import math
+        df = st.as_data_op(float('nan'))
+        t1 = df.skb.apply_func(np.negative)
+        t2 = t1.skb.apply_func(np.negative)
+        out_opt, *_ = optimize(t2)
+        self.assertEqual(len(out_opt), 1)
+        self.assertTrue(math.isnan(out_opt[0].value))
+
+    def test_neg_neg_array_with_nan(self):
+        """array containing NaN: rewrite fires and NaN is preserved."""
+        arr = np.array([1.0, float('nan'), -3.0])
+        df = st.as_data_op(arr)
+        t1 = df.skb.apply_func(np.negative)
+        t2 = t1.skb.apply_func(np.negative)
+        out_opt, *_ = optimize(t2)
+        self.assertEqual(len(out_opt), 1)
+        np.testing.assert_array_equal(out_opt[0].value, arr)
