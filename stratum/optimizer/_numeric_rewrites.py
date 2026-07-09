@@ -1,6 +1,8 @@
+import operator
 from stratum.optimizer.ir._numeric_ops import NumericOp, NumericOpType
 from stratum.optimizer._op_utils import rewrite_pass, replace_op_in_outputs
 from stratum.optimizer.ir._ops import Op, ValueOp
+from stratum.optimizer.ir._ops import BinOp
 
 
 def match_two_op_chain(op_cls, type1, type2):
@@ -179,5 +181,19 @@ eliminate_any_mul_zero = rewrite_pass(
 
 eliminate_div_by_one = rewrite_pass(
     match_identity_operation(NumericOp, NumericOpType.DIVIDE, 1, reversed=False),
+    eliminate_single_op_chain_root_safe,
+)
+
+
+def match_pow_by_one(op):
+    """x ** 1 -> x, matched at the BinOp level: POWER is not yet a NumericOpType
+    (see #62). Non-scalar `right` (OperandRef, ndarray) never matches."""
+    if isinstance(op, BinOp) and op.op is operator.pow:
+        if isinstance(op.right, (int, float)) and op.right == 1:
+            return (op,)
+    return None
+
+eliminate_pow_by_one = rewrite_pass(
+    match_pow_by_one,
     eliminate_single_op_chain_root_safe,
 )
