@@ -9,6 +9,7 @@ from .ir._ops import ChoiceOp, Op, SearchEvalOp, as_op
 from ._op_utils import clone_sub_dag, find_choice_naive, replace_op_in_outputs, show_graph, topological_iterator, validate_dag
 from ._explain import explain_linear_plan
 from ._algebraic_rewrites import algebraic_rewrites, AlgebraicRewritesConfig
+from ._frame_rewrites import frame_rewrites, FrameRewritesConfig
 from ._linearization import linearize_dag
 from ._input_removal_planning import compute_pinned_ops, plan_input_removals
 from stratum.utils._skrub_graph import build_graph
@@ -50,6 +51,8 @@ class OptConfig():
         numeric_ops: bool = True,
         algebraic_rewrites: bool = True,
         algebraic_rewrite_config: AlgebraicRewritesConfig | None = None,
+        frame_rewrites: bool = True,
+        frame_rewrite_config: FrameRewritesConfig | None = None,
     ):
         self.cse = cse
         self.dataframe_ops = dataframe_ops
@@ -59,6 +62,10 @@ class OptConfig():
         if algebraic_rewrite_config is None:
             algebraic_rewrite_config = AlgebraicRewritesConfig()
         self.algebraic_rewrite_config = algebraic_rewrite_config
+        self.frame_rewrites = frame_rewrites
+        if frame_rewrite_config is None:
+            frame_rewrite_config = FrameRewritesConfig()
+        self.frame_rewrite_config = frame_rewrite_config
 
 def _debug_show_graph(root: Op, name: str):
     if FLAGS.debug_graph:
@@ -116,6 +123,10 @@ def optimize(dag_root: DataOp, config: OptConfig = None, env: dict = None):
     if config.algebraic_rewrites:
         root = algebraic_rewrites(root, config.algebraic_rewrite_config)
         _debug_show_graph(root, "algebraic_rewrite")
+
+    if config.frame_rewrites:
+        root = frame_rewrites(root, config.frame_rewrite_config)
+        _debug_show_graph(root, "frame_rewrite")
 
     # Final passes: linearization and buffer removal planning
     _debug_validate_dag(root)  # operand refs after all rewrites, before linearization
