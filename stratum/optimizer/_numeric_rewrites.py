@@ -159,6 +159,37 @@ def fold_to_one(op: Op, root: Op) -> Op:
         operand.outputs = [out for out in operand.outputs if out is not op]
     replace_op_in_outputs(op, one_op)
     return one_op if op is root else root
+def match_constant_foldable(op):
+    """Match a NumericOp whose variable inputs are all ValueOps (constants).
+
+    For binary ops with a constant operand (``opt_operand is None``) only the
+    primary input must be a ValueOp; the constant side is already a Python scalar.
+    For var-var binary ops both inputs must be ValueOps.
+    """
+    if not isinstance(op, NumericOp):
+        return None
+    if not op.inputs:
+        return None
+    if op.opt_operand is not None:
+        # var-var binary: every input must be a ValueOp
+        if not all(isinstance(inp, ValueOp) for inp in op.inputs):
+            return None
+    else:
+        # unary or var-const binary: only the primary input must be a ValueOp
+        if not isinstance(op.inputs[0], ValueOp):
+            return None
+    return (op,)
+
+
+def fold_constant_op_root_safe(op, root):
+    """Evaluate *op* with its constant inputs and replace it with a ValueOp."""
+    input_values = [inp.value for inp in op.inputs]
+    result = op.process("fit", input_values)
+    new_op = ValueOp(result)
+    replace_op_in_outputs(op, new_op)
+    if op is root:
+        root = new_op
+    return root
 
 
 eliminate_log_exp = rewrite_pass(
@@ -381,4 +412,9 @@ eliminate_pow_zero = rewrite_pass(
 eliminate_pow_by_one = rewrite_pass(
     match_identity_operation(NumericOp, NumericOpType.POW, 1, reversed=False),
     eliminate_single_op_chain_root_safe,
+)
+
+eliminate_constant_folding = rewrite_pass(
+    match_constant_foldable,
+    fold_constant_op_root_safe,
 )
