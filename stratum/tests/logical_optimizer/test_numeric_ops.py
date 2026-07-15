@@ -313,6 +313,13 @@ class TestNumericOps(unittest.TestCase):
         with self.assertRaises(ValueError):
             make_binary_numeric_op(op, NumericOpType.ADD)
 
+    def test_generic_numeric_op_scipy_softmax_process(self):
+        """GENERIC process path works for non-numpy funcs (scipy.special.softmax)."""
+        import scipy.special as sp
+        op = NumericOp(func=sp.softmax, inputs=[], outputs=[])
+        x = np.array([1., 2., 3.])
+        np.testing.assert_allclose(op.process("fit", [x]), sp.softmax(x))
+
     def test_make_binary_numeric_op_const_var(self):
         op = CallOp(func=np.subtract, args=None)
         op.args = (10, OperandRef(0))

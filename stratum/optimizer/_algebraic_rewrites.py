@@ -15,6 +15,7 @@ from stratum.optimizer._numeric_rewrites import (
     eliminate_neg_neg,
     rewrite_log_plus_one,
     eliminate_log_sum_exp,
+    fuse_softmax,
 )
 from stratum.optimizer.ir._ops import Op
 from stratum.utils._utils import start_time, log_time
@@ -40,6 +41,7 @@ class AlgebraicRewritesConfig:
     neg_neg: bool = True
     log_plus_one: bool = True
     log_sum_exp: bool = True
+    softmax: bool = True
 
 
 def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
@@ -75,5 +77,7 @@ def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
         root = rewrite_log_plus_one(root)
     if config.log_sum_exp:
         root = eliminate_log_sum_exp(root)
+    if config.softmax:
+        root = fuse_softmax(root)
     log_time("algebraic_rewrite", start)
     return root
