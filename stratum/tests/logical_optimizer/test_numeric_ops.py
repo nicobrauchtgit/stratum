@@ -337,3 +337,29 @@ class TestNumericOps(unittest.TestCase):
         self.assertFalse(any(isinstance(o, NumericOp) and o.type == NumericOpType.MULTIPLY for o in out))
         zero = next(o for o in out if isinstance(o, ValueOp))
         self.assertEqual(zero.process("fit", []), 0.0)
+
+
+class TestLogPlusOne(unittest.TestCase):
+    def test_rewrite_log_plus_one(self):
+        df = st.as_data_op(3)
+        add_expr = df + 1
+        t1 = add_expr.skb.apply_func(np.log)
+        out, *_ = optimize(t1)
+        op = next(o for o in out if isinstance(o, NumericOp) and o.type == NumericOpType.LOG1P)
+        self.assertAlmostEqual(op.process("fit", [3]), np.log1p(3))
+
+    def test_log_plus_one_disabled(self):
+        from stratum.optimizer._algebraic_rewrites import AlgebraicRewritesConfig
+        from stratum.optimizer._optimize import OptConfig
+        df = st.as_data_op(3)
+        t1 = (df + 1).skb.apply_func(np.log)
+        cfg = OptConfig(algebraic_rewrites=True,
+                        algebraic_rewrite_config=AlgebraicRewritesConfig(log_plus_one=False))
+        out, *_ = optimize(t1, config=cfg)
+        self.assertFalse(any(isinstance(o, NumericOp) and o.type == NumericOpType.LOG1P for o in out))
+
+    def test_no_rewrite_log_plus_two(self):
+        df = st.as_data_op(3)
+        t1 = (df + 2).skb.apply_func(np.log)
+        out, *_ = optimize(t1)
+        self.assertFalse(any(isinstance(o, NumericOp) and o.type == NumericOpType.LOG1P for o in out))

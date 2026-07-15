@@ -13,6 +13,7 @@ from stratum.optimizer._numeric_rewrites import (
     eliminate_any_mul_zero,
     eliminate_div_by_one,
     eliminate_neg_neg,
+    rewrite_log_plus_one,
 )
 from stratum.optimizer.ir._ops import Op
 from stratum.utils._utils import start_time, log_time
@@ -36,6 +37,7 @@ class AlgebraicRewritesConfig:
     any_mul_zero: bool = True
     div_by_one: bool = True
     neg_neg: bool = True
+    log_plus_one: bool = True
 
 
 def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
@@ -67,5 +69,7 @@ def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
         root = eliminate_any_mul_zero(root)
     if config.neg_neg:
         root = eliminate_neg_neg(root)
+    if config.log_plus_one:
+        root = rewrite_log_plus_one(root)
     log_time("algebraic_rewrite", start)
     return root
