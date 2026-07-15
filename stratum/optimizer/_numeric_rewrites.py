@@ -216,3 +216,26 @@ eliminate_neg_neg = rewrite_pass(
     match_two_op_chain_by_func(np.negative),
     eliminate_two_op_chain_root_safe,
 )
+
+
+def match_add_one_then_log(op: Op):
+    """Match ``ADD(x, 1) -> LOG`` so it can fuse to ``log1p(x)`` (numerically
+    stable for small x). Only a genuine ``x + 1`` (scalar constant, single
+    consumer) qualifies."""
+    if (isinstance(op, NumericOp)
+            and op.type is NumericOpType.ADD
+            and op.opt_operand is None
+            and isinstance(op.constant, (int, float))
+            and op.constant == 1.0
+            and len(op.outputs) == 1):
+        op2 = op.outputs[0]
+        if isinstance(op2, NumericOp) and op2.type is NumericOpType.LOG:
+            return (op, op2)
+    return None
+
+
+_replace_with_log1p = make_replace_two_op_chain_root_safe(
+    lambda: NumericOp(inputs=[], outputs=[], type=NumericOpType.LOG1P)
+)
+
+rewrite_log_plus_one = rewrite_pass(match_add_one_then_log, _replace_with_log1p)
