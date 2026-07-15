@@ -827,11 +827,17 @@ class TestCSE(unittest.TestCase):
         self.assertEqual(len(out), 2)
 
     def test_pow_one_untouched(self):
-        """x ** 1 must not be affected (identity, not annihilator)."""
+        """The pow_zero annihilator alone must not rewrite x ** 1 (that is the
+        pow_by_one identity, PR #145). Isolate pow_zero by disabling pow_by_one —
+        with both enabled x**1 collapses to x (phase-ordering interaction, G1)."""
         df = st.as_data_op(5)
         t1 = df ** 1
 
-        out, *_ = optimize(t1)
+        config = OptConfig(
+            algebraic_rewrites=True,
+            algebraic_rewrite_config=AlgebraicRewritesConfig(pow_by_one=False),
+        )
+        out, *_ = optimize(t1, config=config)
         self.assertEqual(len(out), 2)
 
     def test_disable_pow_zero_does_not_affect_log_exp(self):
@@ -870,3 +876,64 @@ class TestCSE(unittest.TestCase):
         out, *_ = optimize(combined)
         num_generic = sum(1 for op in out if isinstance(op, NumericOp) and op.type == NumericOpType.GENERIC)
         self.assertGreaterEqual(num_generic, 1)
+
+
+class TestPowByOne(unittest.TestCase):
+    def test_eliminate_pow_by_one_fires(self):
+        df = st.as_data_op(7)
+        t1 = df ** 1
+
+        out, *_ = optimize(t1)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0].value, 7)
+
+    def test_eliminate_pow_by_one_in_chain(self):
+        df = st.as_data_op(4)
+        t1 = df ** 1
+        t2 = t1 * 3
+
+        out, *_ = optimize(t2)
+        # ValueOp + MULTIPLY (with constant=3)  -->  pow-by-one is gone
+        self.assertEqual(len(out), 2)
+        # NOTE: process signature is process(mode, inputs) — two args.
+        self.assertEqual(out[1].process("fit", [out[0].value]), 12)
+
+    def test_eliminate_pow_by_one_disabled(self):
+        df = st.as_data_op(7)
+        t1 = df ** 1
+        config = OptConfig(
+            algebraic_rewrites=True,
+            algebraic_rewrite_config=AlgebraicRewritesConfig(pow_by_one=False),
+        )
+        out, *_ = optimize(t1, config=config)
+        # BinOp for pow stays  -->  2 ops
+        self.assertEqual(len(out), 2)
+
+    def test_no_rewrite_pow_two(self):
+        """x ** 2 must NOT be rewritten by pow_by_one (still becomes SQUARE)."""
+        df = st.as_data_op(4)
+        t1 = df ** 2
+
+        out, *_ = optimize(t1)
+        self.assertEqual(len(out), 2)                        # ValueOp + SQUARE
+        self.assertIsInstance(out[1], NumericOp)
+        self.assertEqual(out[1].type, NumericOpType.SQUARE)
+
+    def test_no_rewrite_pow_variable(self):
+        """x ** y (both graph-fed) must NOT be rewritten by pow_by_one."""
+        x = st.as_data_op(4)
+        y = st.as_data_op(3)
+        t1 = x ** y
+
+        out, *_ = optimize(t1)
+        # x, y, and the BinOp all survive
+        self.assertEqual(len(out), 3)
+
+    def test_pow_by_one_end_to_end(self):
+        """Numerical correctness: (-5) ** 1 == -5, not 5 or 25."""
+        df = st.as_data_op(-5)
+        t1 = df ** 1
+
+        out, *_ = optimize(t1)
+        self.assertEqual(out[0].value, -5)
+
