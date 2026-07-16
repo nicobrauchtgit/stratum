@@ -18,6 +18,7 @@ from stratum.optimizer._numeric_rewrites import (
     rewrite_log_plus_one,
     eliminate_log_sum_exp,
     fuse_softmax,
+    eliminate_constant_folding,
 )
 from stratum.optimizer.ir._ops import Op
 from stratum.utils._utils import start_time, log_time
@@ -46,6 +47,9 @@ class AlgebraicRewritesConfig:
     log_plus_one: bool = True
     log_sum_exp: bool = True
     softmax: bool = True
+    constant_folding: bool = False  # opt-in: folds constant subgraphs; would preempt
+    # pattern-rewrite unit tests that use constant fixtures. Enable explicitly (e.g. in
+    # benchmarks or the CF tests). See plans/INTEGRATION_ANALYSIS.md (phase-ordering).
 
 
 def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
@@ -87,5 +91,7 @@ def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
         root = eliminate_log_sum_exp(root)
     if config.softmax:
         root = fuse_softmax(root)
+    if config.constant_folding:
+        root = eliminate_constant_folding(root)
     log_time("algebraic_rewrite", start)
     return root
