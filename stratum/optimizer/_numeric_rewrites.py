@@ -1,3 +1,4 @@
+import numpy as np
 from stratum.optimizer.ir._numeric_ops import NumericOp, NumericOpType
 from stratum.optimizer._op_utils import rewrite_pass, replace_op_in_outputs
 from stratum.optimizer.ir._ops import Op, ValueOp
@@ -10,6 +11,34 @@ def match_two_op_chain(op_cls, type1, type2):
             op2 = op.outputs[0]
             if isinstance(op2, op_cls) and op2.type is type2:
                 return (op, op2)
+        return None
+    return match
+
+
+def _is_generic_func_op(op, func) -> bool:
+    """True for a GENERIC NumericOp wrapping exactly `func` with no extra
+    args/kwargs (extras like `where=` change the op's semantics)."""
+    return (isinstance(op, NumericOp)
+            and op.type is NumericOpType.GENERIC
+            and op.func is func
+            and not op.args and not op.kwargs)
+
+
+def match_two_op_chain_by_func(func):
+    """Match the innermost consecutive pair of GENERIC NumericOps wrapping `func`.
+
+    Like `match_two_op_chain`, but keyed on `func` for np functions without a
+    dedicated NumericOpType. Innermost-first collapses chains one pair at a
+    time, which keeps odd-length chains (n >= 3) safe under the pass's stale
+    topological order."""
+    def match(op):
+        if not (_is_generic_func_op(op, func) and len(op.outputs) == 1):
+            return None
+        if op.inputs and _is_generic_func_op(op.inputs[0], func):
+            return None  # not the innermost pair -- let the inner one collapse first
+        op2 = op.outputs[0]
+        if _is_generic_func_op(op2, func):
+            return (op, op2)
         return None
     return match
 
@@ -180,4 +209,10 @@ eliminate_any_mul_zero = rewrite_pass(
 eliminate_div_by_one = rewrite_pass(
     match_identity_operation(NumericOp, NumericOpType.DIVIDE, 1, reversed=False),
     eliminate_single_op_chain_root_safe,
+)
+
+
+eliminate_neg_neg = rewrite_pass(
+    match_two_op_chain_by_func(np.negative),
+    eliminate_two_op_chain_root_safe,
 )
