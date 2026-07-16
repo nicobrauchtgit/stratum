@@ -20,7 +20,7 @@ from stratum.optimizer._numeric_rewrites import (
     fuse_softmax,
     eliminate_constant_folding,
 )
-from stratum.optimizer._projection_rewrites import fuse_consecutive_select
+from stratum.optimizer._projection_rewrites import fuse_consecutive_select, fuse_consecutive_drop
 from stratum.optimizer.ir._ops import Op
 from stratum.utils._utils import start_time, log_time
 import logging
@@ -52,6 +52,7 @@ class AlgebraicRewritesConfig:
     # pattern-rewrite unit tests that use constant fixtures. Enable explicitly (e.g. in
     # benchmarks or the CF tests). See plans/INTEGRATION_ANALYSIS.md (phase-ordering).
     consecutive_select: bool = True
+    consecutive_drop: bool = True
 
 
 def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
@@ -97,5 +98,7 @@ def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
         root = eliminate_constant_folding(root)
     if config.consecutive_select:
         root = fuse_consecutive_select(root)
+    if config.consecutive_drop:
+        root = fuse_consecutive_drop(root)
     log_time("algebraic_rewrite", start)
     return root

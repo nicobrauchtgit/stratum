@@ -10,8 +10,9 @@ per-category ops.
 import os
 import tempfile
 import unittest
-from stratum.optimizer._projection_rewrites import fuse_consecutive_select
+from stratum.optimizer._projection_rewrites import fuse_consecutive_select, fuse_consecutive_drop
 from stratum.optimizer.ir._ops import Op, GetItemOp
+from stratum.optimizer.ir._dataframe_ops import DropOp
 from contextlib import contextmanager
 
 import numpy as np
@@ -188,3 +189,47 @@ class TestConsecutiveSelectEndToEnd(unittest.TestCase):
         gis = [o for o in out if isinstance(o, GetItemOp)]
         self.assertEqual(len(gis), 1)              # the two selects fused into one
         self.assertEqual(gis[0].key, ["a", "b"])
+
+
+class TestConsecutiveDropRewrites(unittest.TestCase):
+    def test_fuse_consecutive_drop_success(self):
+        source = Op()
+        op1 = DropOp(args=(), kwargs={"columns": ["x"]})
+        op1.inputs = [source]
+        source.outputs = [op1]
+        op2 = DropOp(args=(), kwargs={"columns": ["y"]})
+        op2.inputs = [op1]
+        op1.outputs = [op2]
+
+        result_root = fuse_consecutive_drop(op2)
+        self.assertIsNot(op2, result_root)
+        self.assertIsInstance(result_root, DropOp)
+        self.assertEqual(["x", "y"], result_root.kwargs["columns"])
+        self.assertIs(source, result_root.inputs[0])
+
+    def test_fuse_consecutive_drop_mixed_syntax_success(self):
+        source = Op()
+        op1 = DropOp(args=(["x"],), kwargs={"axis": 1})
+        op1.inputs = [source]
+        source.outputs = [op1]
+        op2 = DropOp(args=(), kwargs={"columns": ["y"]})
+        op2.inputs = [op1]
+        op1.outputs = [op2]
+
+        result_root = fuse_consecutive_drop(op2)
+        self.assertIsInstance(result_root, DropOp)
+        self.assertEqual(["x", "y"], result_root.kwargs["columns"])
+        self.assertIs(source, result_root.inputs[0])
+
+    def test_no_fuse_drop_when_row_drop(self):
+        source = Op()
+        op1 = DropOp(args=(["x"],), kwargs={})  
+        op1.inputs = [source]
+        source.outputs = [op1]
+        op2 = DropOp(args=(), kwargs={"columns": ["y"]})
+        op2.inputs = [op1]
+        op1.outputs = [op2]
+
+        result_root = fuse_consecutive_drop(op2)
+        self.assertIs(op2, result_root)
+        self.assertIs(op1, op2.inputs[0])
