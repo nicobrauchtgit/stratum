@@ -10,6 +10,8 @@ per-category ops.
 import os
 import tempfile
 import unittest
+from stratum.optimizer._projection_rewrites import fuse_consecutive_select
+from stratum.optimizer.ir._ops import Op, GetItemOp
 from contextlib import contextmanager
 
 import numpy as np
@@ -122,3 +124,67 @@ class TestConcatOpPolars(PolarsTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestProjectionRewrites(unittest.TestCase):
+    def test_no_fuse_select_when_not_subset(self):
+        source = Op()
+        op1 = GetItemOp(key=["x"])
+        op1.inputs = [source]
+        source.outputs = [op1]
+        op2 = GetItemOp(key=["y"])
+        op2.inputs = [op1]
+        op1.outputs = [op2]
+
+        result_root = fuse_consecutive_select(op2)
+        self.assertIs(op2, result_root)
+        self.assertIs(op1, op2.inputs[0])
+
+    def test_fuse_consecutive_select_success(self):
+        source = Op()
+        op1 = GetItemOp(key=["x", "y"])
+        op1.inputs = [source]
+        source.outputs = [op1]
+        op2 = GetItemOp(key=["x"])
+        op2.inputs = [op1]
+        op1.outputs = [op2]
+
+        result_root = fuse_consecutive_select(op2)
+        self.assertIs(op2, result_root)
+        self.assertIs(source, op2.inputs[0])
+        self.assertIn(op2, source.outputs)
+        self.assertNotIn(op1, source.outputs)
+
+    def test_no_fuse_select_when_multiple_outputs(self):
+        source = Op()
+        op1 = GetItemOp(key=["x", "y"])
+        op1.inputs = [source]
+        source.outputs = [op1]
+        op2 = GetItemOp(key=["x"])
+        op2.inputs = [op1]
+        op3 = Op()  
+        op3.inputs = [op1]
+        op1.outputs = [op2, op3] 
+        sink = Op()
+        sink.inputs = [op2, op3]
+        op2.outputs = [sink]
+        op3.outputs = [sink]
+
+        result_root = fuse_consecutive_select(sink)
+        self.assertIs(sink, result_root)
+        self.assertIs(op1, op2.inputs[0])
+        self.assertIs(op1, op3.inputs[0])
+
+
+class TestConsecutiveSelectEndToEnd(unittest.TestCase):
+    def test_fuse_fires_through_optimize(self):
+        import pandas as pd
+        import stratum as st
+        from stratum.optimizer._optimize import optimize
+        from stratum.optimizer.ir._ops import GetItemOp
+        df = pd.DataFrame({"a": [1, 2], "b": [3, 4], "c": [5, 6]})
+        t = st.var("d", df)[["a", "b", "c"]][["a", "b"]]
+        out, *_ = optimize(t)
+        gis = [o for o in out if isinstance(o, GetItemOp)]
+        self.assertEqual(len(gis), 1)              # the two selects fused into one
+        self.assertEqual(gis[0].key, ["a", "b"])
