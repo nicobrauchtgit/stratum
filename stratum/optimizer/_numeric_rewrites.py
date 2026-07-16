@@ -372,3 +372,13 @@ eliminate_pow_zero = rewrite_pass(
     match_identity_operation(NumericOp, NumericOpType.POW, 0, reversed=False),
     fold_to_one,
 )
+
+
+# x ** 1 -> x. Since #139 introduced POW into NumericOpType, `x ** 1` now lowers to
+# NumericOp(type=POW, constant=1, opt_operand=None), so this is a first-class identity
+# elimination reusing the same helper as x/1 and x*1 (was previously matched at the raw
+# BinOp level because POW was not yet a NumericOpType — see G1 in plans/INTEGRATION_ANALYSIS.md).
+eliminate_pow_by_one = rewrite_pass(
+    match_identity_operation(NumericOp, NumericOpType.POW, 1, reversed=False),
+    eliminate_single_op_chain_root_safe,
+)
