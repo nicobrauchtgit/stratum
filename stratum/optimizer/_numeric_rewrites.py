@@ -67,13 +67,6 @@ def match_identity_operation(op_cls, type1, const, reversed=None):
     return match
 
 
-def eliminate_single_op_chain_root_safe(op, root):
-    eliminate_single_op_chain(op)
-    if op is root:
-        root = op.inputs[0]
-    return root
-
-
 def eliminate_single_op_chain(op):
     primary = op.inputs[0]
     op.replace_input_of_outputs(primary)
@@ -92,17 +85,29 @@ def eliminate_two_op_chain(op1, op2):
     replace_op_in_outputs(op2, x)
 
 
-def eliminate_two_op_chain_root_safe(op1: Op, op2: Op, root: Op) -> Op:
-    """Wrapper around eliminate_two_op_chain that handles the case where
-    op2 is the root (last node) of the DAG -- returns the updated root."""
-    eliminate_two_op_chain(op1, op2)
-    if op2 is root:
-        root = op1.inputs[0]
-    return root
+def _make_eliminate_chain_root_safe(eliminate_fn):
+    """Safely updates the graph's root pointer whenever a chain of operations is deleted. 
+    If the last deleted operation was the main root of the graph, 
+    it automatically sets its surviving parent node as the new root.
+    """
+    def action(*ops_and_root):
+        *ops, root = ops_and_root
+        eliminate_fn(*ops)
+        if ops[-1] is root:
+            root = ops[0].inputs[0]
+        return root
+    return action
+
+
+eliminate_single_op_chain_root_safe = _make_eliminate_chain_root_safe(eliminate_single_op_chain)
+eliminate_two_op_chain_root_safe = _make_eliminate_chain_root_safe(eliminate_two_op_chain)
 
 
 def replace_two_op_chain(op1: Op, op2: Op, replacement: Op):
-    """Replace op1 -> op2 with replacement: x -> replacement -> downstream."""
+    """Replaces a chain of operations (from a starting node op1 to an ending node op2) 
+    with a single new operation in the graph. It safely rewires the original 
+    input and all downstream outputs to point directly to the new replacement node.
+    """
     x = op1.inputs[0]
     x.replace_output(op1, replacement)
     replacement.add_input(x)
@@ -111,12 +116,16 @@ def replace_two_op_chain(op1: Op, op2: Op, replacement: Op):
         downstream.replace_input(op2, replacement)
 
 
-def make_replace_two_op_chain_root_safe(make_replacement):
-    """Action factory: replace a two-op chain with a new op from make_replacement()."""
-    def action(op1: Op, op2: Op, root: Op) -> Op:
+def make_replace_op_chain_root_safe(make_replacement):
+    """Creates an action that generates a new replacement node and swaps out an operation 
+    chain of any length. It also updates the graph's main root pointer to the new node 
+    if the last operation in the replaced chain was the root.
+    """
+    def action(*ops_and_root):
+        *ops, root = ops_and_root
         replacement = make_replacement()
-        replace_two_op_chain(op1, op2, replacement)
-        if op2 is root:
+        replace_two_op_chain(ops[0], ops[-1], replacement)
+        if ops[-1] is root:
             root = replacement
         return root
     return action
@@ -132,33 +141,26 @@ def match_exp_minus_one(op):
     return None
 
 
-def fold_to_zero(op: Op, root: Op) -> Op:
-    """Constant-fold ``x * 0`` (or ``0 * x``) to ``0``.
-
-    Unlike the identity rewrites, the result is not the input but a constant, so
-    we drop the multiply and its now-dead operand edges and rewire downstream
-    consumers to a :class:`ValueOp` holding ``0.0``. A ValueOp is a source node
-    (no inputs) whose ``process`` returns the constant directly, so the whole
-    ``x`` subgraph is never computed.
+def make_fold_to_constant_root_safe(value):
+    """creates an action that replaces a calculated operation node with a fixed constant value node (ValueOp). 
+    It disconnects the old operation from its input subgraph, connects downstream nodes to the new constant, 
+    and updates the graph root if the replaced node was the root.
     """
-    zero_op = ValueOp(0.0)
-    for operand in op.inputs:
-        operand.outputs = [out for out in operand.outputs if out is not op]
-    replace_op_in_outputs(op, zero_op)
-    return zero_op if op is root else root
+    def action(op: Op, root: Op) -> Op:
+        value_op = ValueOp(value)
+        for operand in op.inputs:
+            operand.outputs = [out for out in operand.outputs if out is not op]
+        replace_op_in_outputs(op, value_op)
+        return value_op if op is root else root
+    return action
 
 
-def fold_to_one(op: Op, root: Op) -> Op:
-    """Constant-fold ``x ** 0`` to ``1``.
+# x * 0 (or 0 * x) -> 0
+fold_to_zero = make_fold_to_constant_root_safe(0.0)
+# x ** 0 -> 1
+fold_to_one = make_fold_to_constant_root_safe(1)
 
-    Parallels :func:`fold_to_zero`: drops the pow op and its dead operand edges
-    and rewires downstream consumers to a :class:`ValueOp` holding ``1``.
-    """
-    one_op = ValueOp(1)
-    for operand in op.inputs:
-        operand.outputs = [out for out in operand.outputs if out is not op]
-    replace_op_in_outputs(op, one_op)
-    return one_op if op is root else root
+
 def match_constant_foldable(op):
     """Match a NumericOp whose variable inputs are all ValueOps (constants).
 
@@ -212,7 +214,7 @@ eliminate_log1p_expm1 = rewrite_pass(
     eliminate_two_op_chain_root_safe,
 )
 
-_replace_with_abs = make_replace_two_op_chain_root_safe(
+_replace_with_abs = make_replace_op_chain_root_safe(
     lambda: NumericOp(inputs=[], outputs=[], type=NumericOpType.ABS)
 )
 
@@ -236,7 +238,7 @@ eliminate_add_zero = rewrite_pass(
     eliminate_single_op_chain_root_safe,
 )
 
-_replace_with_expm1 = make_replace_two_op_chain_root_safe(
+_replace_with_expm1 = make_replace_op_chain_root_safe(
     lambda: NumericOp(inputs=[], outputs=[], type=NumericOpType.EXPM1)
 )
 
@@ -281,31 +283,11 @@ def match_add_one_then_log(op: Op):
     return None
 
 
-_replace_with_log1p = make_replace_two_op_chain_root_safe(
+_replace_with_log1p = make_replace_op_chain_root_safe(
     lambda: NumericOp(inputs=[], outputs=[], type=NumericOpType.LOG1P)
 )
 
 rewrite_log_plus_one = rewrite_pass(match_add_one_then_log, _replace_with_log1p)
-
-def replace_three_op_chain(op1: Op, op2: Op, op3: Op, replacement: Op):
-    """Replace op1 -> op2 -> op3 with replacement: x -> replacement -> downstream."""
-    x = op1.inputs[0]
-    x.replace_output(op1, replacement)
-    replacement.add_input(x)
-    for downstream in op3.outputs:
-        replacement.add_output(downstream)
-        downstream.replace_input(op3, replacement)
-
-
-def make_replace_three_op_chain_root_safe(make_replacement):
-    """Action factory: replace a three-op chain with a new op from make_replacement()."""
-    def action(op1: Op, op2: Op, op3: Op, root: Op) -> Op:
-        replacement = make_replacement()
-        replace_three_op_chain(op1, op2, op3, replacement)
-        if op3 is root:
-            root = replacement
-        return root
-    return action
 
 
 def _logsumexp(x):
@@ -342,7 +324,7 @@ def match_log_sum_exp(op):
     return (op, op2, op3)
 
 
-_replace_with_logsumexp = make_replace_three_op_chain_root_safe(
+_replace_with_logsumexp = make_replace_op_chain_root_safe(
     lambda: NumericOp(inputs=[], outputs=[], func=_logsumexp)
 )
 
