@@ -5,7 +5,7 @@ Full write-up: **`REPORT.md`** (the 8-page report). Base: `nicobrauchtgit/stratu
 36 GB, Python 3.12 / NumPy 2.3 / pandas 3.0 / SciPy 1.16 / sklearn 1.8 / skrub 0.8.
 
 Harnesses (run `PYTHONPATH=<repo> .venv/bin/python benchmarks/rewrites/<script>`):
-`structural_bench.py`, `order_bench.py`, `walltime_bench.py`.
+`structural_bench.py`, `order_bench.py`, `walltime_bench.py`, `accuracy_bench.py`, `memory_bench.py`.
 
 ## Q1 — do the rewrites help?
 - **Structural:** all 16 fire; −19 ops in isolation (deterministic).
@@ -29,3 +29,14 @@ Harnesses (run `PYTHONPATH=<repo> .venv/bin/python benchmarks/rewrites/<script>`
 
 Confirms the Stratum paper's "rewrite ordering is workload-dependent." Also found a missed
 optimization: `y*exp(0)` stays `y*1` (identity matches scalar literals, not folded ValueOps).
+
+## Accuracy & memory (why fusions matter despite ~1.0x speed)
+- **Accuracy:** naive `log(1+x)`/`exp(x)-1` (x=1e-12) lose ~4 digits (rel-err 8.9e-5) vs
+  exact when fused; naive softmax/logsumexp on `[1000,1001,1002]` **overflow to NaN/inf**
+  while fused are correct. Stability is the fusions' real win.
+- **Memory (peak RSS, N=20M):** eliminations save **304 MB**; `log1p` fusion saves **153 MB**
+  (avoids the `x+1` intermediate); `softmax` fusion saves **~0** (scipy allocates internally).
+- **Implication:** DAG-level fusion into a library call cuts op-count but not always
+  memory/passes. A true single-pass fused **kernel** (meta-fold via numexpr now, Rust kernel
+  as future work), cost-gated, + cross-pipeline caching, is the path to real scaling speedups.
+  See REPORT.md §7.

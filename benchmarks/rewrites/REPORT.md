@@ -238,20 +238,94 @@ passes. This is a concrete instance of the Stratum paper's statement that *"rewr
 is workload-dependent"*, and it argues for either a principled ordering (enabling rewrites
 before the rewrites they enable) or fixpoint iteration.
 
-## 7. Discussion & conclusion
+### 6.4 Accuracy — the fusions' real win
 
-We integrated 16 semantics-preserving rewrites into Stratum's optimizer, each with a
-matcher, an action, and tests, on a single benchmarked base. Structurally every rewrite
-reduces the DAG; empirically the redundancy-eliminating rewrites give small but real,
-scale-dependent speedups on the redundant pipelines Stratum targets, while the fusion
-rewrites trade speed-neutrality for numerical stability. Our central finding on ordering:
-the current single-pass optimizer is **order-sensitive for enabling interactions** — merge
-order can leave optimizations on the table — and a fixpoint schedule (or an
-enabling-aware ordering) removes the dependence. Future work: match folded `ValueOp`
-constants in the identity rewrites (§4.5), extend `select`/`drop` fusion to
-`ColumnSelectorOp`, add an accuracy benchmark for the stability fusions, and integrate the
-rewrites with CSE/pushdown ordering as the paper suggests (delaying projection pushdown for
-higher CSE opportunities).
+The fusion rewrites are numerical-stability rewrites, so we measure accuracy directly
+(`accuracy_bench.py`): rewrites OFF (naive chain) vs ON (fused op) vs a high-precision reference.
+
+| input | naive (OFF) | fused (ON) |
+|---|---|---|
+| `log(1+x)`, x=1e-12 | rel-err **8.9e-5** | rel-err **0** |
+| `exp(x)-1`, x=1e-12 | rel-err **8.9e-5** | rel-err **0** |
+| `softmax([1000,1001,1002])` | **NaN (overflow)** | correct |
+| `log(sum(exp([1000,1001,1002])))` | **inf (overflow)** | correct (1002.41) |
+
+Naive forms lose ~4 significant digits for small inputs and **overflow to NaN/inf** for large
+ones; the fused ops are exact/finite. This is the win the wall-clock benchmark cannot show,
+and the correct justification for `log1p`/`expm1`/`softmax`/`logsumexp`.
+
+### 6.5 Memory — fusion helps *inconsistently*
+
+Each `NumericOp` materializes a fresh array, so removing/fusing ops should cut peak memory.
+Measured peak RSS (separate subprocess per variant, N=20M float64 ≈ 160 MB/array):
+
+| pipeline | ops OFF→ON | peak RSS OFF | peak RSS ON | saved |
+|---|---|---|---|---|
+| redundant identities | 7→1 | 1626.8 MB | 1323.0 MB | **303.8 MB** |
+| `log1p` (`log(x+1)`) | 3→2 | 1016.5 MB | 863.8 MB | **152.7 MB** |
+| `softmax` (`exp/sum(exp)`) | 4→2 | 1018.0 MB | 1019.0 MB | **~0 MB** |
+
+**Finding.** Eliminations free real memory. `log1p` fusion also saves ~one array (it avoids
+materializing `x+1`) — a memory win despite being time-neutral. But `softmax` fusion saves
+**nothing**: calling `scipy.special.softmax` just moves the intermediate allocations *inside*
+the library call. DAG-level fusion into a library call reduces op-count but not necessarily
+memory or passes — only a true single-pass fused *kernel* does (§7.2).
+
+## 7. Discussion: inferred improvements
+
+### 7.1 Elimination removes work; fusion (as implemented) relabels it
+Eliminations delete an op (one numpy pass + one allocation) with no replacement → they save
+time (1.2–1.35×) and memory, scaling with data. Fusions replace a chain with one op that
+still runs the dominant transcendental pass and, when it is a library call, re-allocates its
+temporaries internally → time-neutral and only sometimes memory-saving (`log1p` yes,
+`softmax` no). Their guaranteed win is accuracy (§6.4).
+
+### 7.2 A "meta-fold": true loop/kernel fusion for real speedups
+The missing lever is compiling a maximal connected **elementwise sub-DAG into a single pass
+with no intermediates** (SystemML-style operator fusion [Stratum ref 11]). One generic pass
+would (i) find maximal elementwise regions, (ii) compile them to a fused kernel, (iii) splice
+via a `replace_subdag` primitive — subsuming `softmax`/`log1p`/`logsumexp` *and* arbitrary
+user chains, and, unlike today's fusions, removing passes and allocations (speed *and* memory
+wins that scale). Two backends, a natural progression:
+
+| backend | pros | cons |
+|---|---|---|
+| **numexpr** (already a dependency, unused) | quick win; multithreaded; temp-free elementwise | limited funcs; reductions (softmax's `sum`) don't fuse cleanly; slight math diffs |
+| **Rust kernel** (future work; cf. Project #4, paper §4.2) | single pass, in-place, GIL-releasing, parallel, handles reductions | more effort; PyO3 boundary |
+
+**Future work: a Rust fused-elementwise kernel** is the principled target — single-pass,
+in-place, parallel execution that turns structural op-count reduction into real speed and
+memory reduction, aligned with Stratum's Rust backend and its operator-fusion direction.
+
+### 7.3 Caching / reuse
+CSE already dedups within one DAG. The larger, orthogonal win is the paper's
+cross-DAG/cross-iteration reuse (`hash(op-spec + input-hashes) → materialized output` over
+the existing `BufferPool`), capturing the agentic redundancy (median 16% code change/iter)
+Stratum targets. For folds: a **compiled-kernel cache** (memoize the fused kernel by sub-DAG
+structure — compile once, run many) and a **constant cache** (memoize expensive compile-time
+constants across variants). Caching is workload-gated: large win under repetition, overhead
+for a single pass over unique data.
+
+### 7.4 Cost-based application
+Rewrites fire unconditionally today — and `log1p` fusion measured slightly *slower*. The
+metadata pass already exposes `#rows`/`dtype`; a cost model should gate fusions on whether
+they reduce passes/allocations, while stability fusions stay correctness-gated. This
+separates the two goals we conflated: **speed** (loop fusion, cost-gated) vs **accuracy**
+(stability fusions).
+
+## 8. Conclusion
+We integrated 16 semantics-preserving rewrites into Stratum's optimizer, each with a matcher,
+an action, and tests, on a single benchmarked base. Structurally every rewrite reduces the
+DAG; empirically eliminations give small-but-real, scale-dependent speed and memory wins on
+the redundant pipelines Stratum targets, while the fusion rewrites are speed-neutral but
+deliver decisive numerical stability and (for `log1p`) memory savings. Rewrite order is
+order-sensitive for enabling interactions (merge order can leave optimizations on the table);
+a fixpoint or enabling-aware schedule removes the dependence. The highest-leverage next step
+is a cost-gated **meta-fold** (generic elementwise loop fusion) backed by `numexpr` and, as
+future work, a **Rust fused kernel**, complemented by cross-pipeline caching — converting our
+structural reductions into real, scaling speed and memory gains. Further follow-ups: match
+folded `ValueOp` constants in the identity rewrites (§4.5), and extend `select`/`drop` fusion
+to `ColumnSelectorOp`.
 
 ## Appendix — reproducing
 
@@ -260,6 +334,8 @@ git switch -c bench-run nicobrauchtgit/stratum:bench   # base + benchmarks/rewri
 PYTHONPATH=$PWD .venv/bin/python benchmarks/rewrites/structural_bench.py
 PYTHONPATH=$PWD .venv/bin/python benchmarks/rewrites/order_bench.py
 PYTHONPATH=$PWD .venv/bin/python benchmarks/rewrites/walltime_bench.py
+PYTHONPATH=$PWD .venv/bin/python benchmarks/rewrites/accuracy_bench.py
+PYTHONPATH=$PWD .venv/bin/python benchmarks/rewrites/memory_bench.py
 ```
 Rewrites and tests live in `stratum/optimizer/_numeric_rewrites.py`,
 `stratum/optimizer/_projection_rewrites.py`, `stratum/optimizer/_algebraic_rewrites.py`,
