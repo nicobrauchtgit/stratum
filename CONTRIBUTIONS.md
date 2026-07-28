@@ -14,7 +14,7 @@ here from the team's individual branches.
 | Member | Rewrites | Other |
 |---|---|---|
 | Aiman Al-Hazmi (`aimanalhazmi`) | `abs(abs(x))`, `x+0`, `exp(x)-1 → expm1`, `0/x → 0` | report |
-| Mateusz Tomaszewski (`matit02`) | `x-0`, `x**0 → 1` (+ `POW` enum), `log(sum(exp(x))) → logsumexp`, constant folding | report |
+| Mateusz Tomaszewski (`matit02`) | `x-0`, `x-x → 0`, `x**0 → 1` (+ `POW` enum), `log(sum(exp(x))) → logsumexp`, constant folding | report |
 | Adam Zalwowski (`Sandi077`) | `x*0 → 0`, `log(1+x) → log1p`, `select∘select`, `drop∘drop` | report |
 | Nicolas Kohl (`nicobrauchtgit`) | `x/1`, `x**1`, `-(-x)`, `exp/sum(exp) → softmax` (+ `NEGATIVE`/`SUM` enum) | integration, benchmark suite, report |
 
@@ -39,6 +39,11 @@ here from the team's individual branches.
 ### Mateusz Tomaszewski (`matit02`)
 
 - **`x-0 → x`** — upstream PR #138 (merged as #134). `eliminate_identity_subtract`.
+- **`x-x → 0`** — PR #161 (issue #160). `match_self_subtract` +
+  `eliminate_self_subtract`, folding to a `ValueOp(0.0)` through the existing
+  `fold_to_zero` action. Matches only a var-var SUBTRACT whose two operands
+  resolve to the same op. Integrated onto this base by Nicolas; the code is
+  Mateusz's.
 - **`x**0 → 1`** — PR #139. `eliminate_pow_zero` + `fold_to_one`.
   **Also added `POW` to `NumericOpType`** (`stratum/optimizer/ir/_numeric_ops.py`),
   the representation change discussed in the report's §IV-A.
