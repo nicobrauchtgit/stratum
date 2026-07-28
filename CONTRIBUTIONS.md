@@ -13,9 +13,9 @@ here from the team's individual branches.
 
 | Member | Rewrites | Other |
 |---|---|---|
-| Aiman Al-Hazmi (`aimanalhazmi`) | `abs(abs(x))`, `x+0`, `exp(x)-1 → expm1`, `0/x → 0` | — |
-| Mateusz Tomaszewski (`matit02`) | `x-0`, `x**0 → 1` (+ `POW` enum), `log(sum(exp(x))) → logsumexp`, constant folding | — |
-| Adam Zalwowski (`Sandi077`) | `x*0 → 0`, `log(1+x) → log1p`, `select∘select`, `drop∘drop` | — |
+| Aiman Al-Hazmi (`aimanalhazmi`) | `abs(abs(x))`, `x+0`, `exp(x)-1 → expm1`, `0/x → 0` | report |
+| Mateusz Tomaszewski (`matit02`) | `x-0`, `x**0 → 1` (+ `POW` enum), `log(sum(exp(x))) → logsumexp`, constant folding | report |
+| Adam Zalwowski (`Sandi077`) | `x*0 → 0`, `log(1+x) → log1p`, `select∘select`, `drop∘drop` | report |
 | Nicolas Kohl (`nicobrauchtgit`) | `x/1`, `x**1`, `-(-x)`, `exp/sum(exp) → softmax` (+ `NEGATIVE`/`SUM` enum) | integration, benchmark suite, report |
 
 ---
