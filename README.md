@@ -4,7 +4,7 @@
 Aiman Al-Hazmi, Adam Zalwowski, Mateusz Tomaszewski, Nicolas Kohl
 Technische Universität Berlin
 
-This fork adds **17 rule-based rewrites** to Stratum's logical optimizer, plus a
+This fork adds **18 rule-based rewrites** to Stratum's logical optimizer, plus a
 reproducible benchmark suite evaluating them. Upstream Stratum's own README is
 preserved as [`README_stratum_upstream.md`](README_stratum_upstream.md).
 
@@ -59,6 +59,7 @@ built from.
 | `x*0 → 0` | `match_identity_operation` | `fold_to_zero` |
 | `x**0 → 1` | `match_identity_operation` | `fold_to_one` |
 | `x-x → 0` | `match_self_subtract` | `fold_to_zero` |
+| `0/x → 0` *(opt-in)* | `match_zero_div` | `fold_to_zero` |
 | `abs(abs(x))` | `match_two_op_chain` | `make_replace_two_op_chain_root_safe` |
 | `-(-x) → x` | `match_two_op_chain(..., innermost_first=True)` | `eliminate_two_op_chain_root_safe` |
 | `exp(x)-1 → expm1` | `match_exp_minus_one` | replace-with-`EXPM1` |
@@ -68,7 +69,7 @@ built from.
 | constant folding | `match_constant_foldable` | `eliminate_constant_folding` |
 
 Dispatch and feature flags: **`stratum/optimizer/_algebraic_rewrites.py`**
-(`AlgebraicRewritesConfig` — one boolean per rewrite; `constant_folding` is
+(`AlgebraicRewritesConfig` — one boolean per rewrite; `constant_folding` and `zero_div` are
 opt-in (default `False`) because it pre-empts pattern-rewrite unit tests that
 use constant fixtures).
 
@@ -96,7 +97,7 @@ and how to run it, and `benchmarks/rewrites/logs/` for captured output.
 
 | Question | Answer |
 |---|---|
-| Do the rewrites fire? | All 17, −20 operations in isolation (Table I) |
+| Do the rewrites fire? | All 18, −21 operations in isolation (Table I) |
 | Do they speed things up? | Eliminations up to **1.35×**; fusions ≈1.0× |
 | Then why fuse? | **Stability**: naive softmax/logsumexp overflow to `NaN`; naive `log1p`/`expm1` lose ~4 digits |
 | Does order matter? | Yes — one rewrite enables another; a bad order leaves 3 ops where 2 suffice |

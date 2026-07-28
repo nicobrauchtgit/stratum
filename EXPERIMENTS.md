@@ -54,7 +54,9 @@ For each rewrite, builds a pipeline that triggers it and counts DAG operations
 with that rewrite off, then on (everything else disabled). No dataset needed;
 fully deterministic.
 
-**Result:** all 17 fire; 44 → 24 operations, i.e. **−20 in isolation**.
+**Result:** all 18 fire; 46 → 25 operations, i.e. **−21 in isolation**.
+(`zero_div` and `constant_folding` are opt-in, so the harness enables each
+flag explicitly rather than relying on defaults.)
 
 ### `order_bench.py` → report §IV-B
 
