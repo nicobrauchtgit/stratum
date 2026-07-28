@@ -47,6 +47,12 @@ Each rewrite is a `(match, action)` pair wired together by `rewrite_pass`.
 A matcher inspects a node and returns the matched ops or `None`; an action
 rewires the DAG and returns the (possibly new) root.
 
+The matcher/action helpers themselves (`match_two_op_chain`,
+`match_identity_operation`, `replace_two_op_chain`, ...) are **pre-existing**
+— see [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md#shared-infrastructure-we-did-not-write)
+for who wrote what. The table below lists which helper each of our rewrites is
+built from.
+
 | Rewrite | Matcher | Action |
 |---|---|---|
 | `x*1`, `x+0`, `x-0`, `x/1`, `x**1` | `match_identity_operation` | `eliminate_single_op_chain_root_safe` |
