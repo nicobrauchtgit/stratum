@@ -105,12 +105,40 @@ Evaluation.
 
 ---
 
-## Shared / upstream
+## Shared infrastructure we did *not* write
 
-- The optimizer framework itself (`rewrite_pass`, `topological_iterator`,
-  `Op` IR, CSE, linearisation, scheduler) is **upstream Stratum**, not ours.
-- `match_two_op_chain`, `eliminate_single_op_chain_root_safe`,
-  `replace_two_op_chain` and `make_replace_two_op_chain_root_safe` are shared
-  helpers extended by several of us as new rewrites needed them.
-- `devbox.json` / `pyproject.toml` environment fixes (nix-provided
-  `lightgbm`/`xgboost`) — Nicolas.
+Most of the matcher/action helpers our rewrites are built from predate this
+project. They come from the Stratum maintainer and from earlier contributors,
+and are listed here so the boundary of our own work is unambiguous. Each row is
+traceable with `git log -S"def <name>" -- stratum/optimizer/_numeric_rewrites.py`.
+
+| Helper | Introduced by | Commit |
+|---|---|---|
+| `rewrite_pass`, `topological_iterator`, `Op` IR, CSE, linearisation, scheduler | Elias Strauss (maintainer) | various |
+| `match_two_op_chain`, `eliminate_two_op_chain`, `eliminate_two_op_chain_root_safe` | Elias Strauss | `3a4e2be` *"rewrite API for all future rewrites"* |
+| `replace_two_op_chain`, `make_replace_two_op_chain_root_safe` | Tim Schuster | `e9e60cc` (`sqrt(x**2) → abs(x)`, #59) |
+| `match_identity_operation`, `eliminate_single_op_chain(_root_safe)` | Aram164 | `a7b7dc6` (`x*1 → x`, #92) |
+| `_is_scalar_const` (ndarray guard) | Elias Strauss | `1ab4687` |
+| `_matches_scalar_const`, `match_two_op_chain(match1=, match2=)` | Elias Strauss | `0d36fa4` |
+
+Neither Tim Schuster nor Aram164 is a member of this project team; their
+rewrites were merged upstream before ours and we build on their helpers.
+
+**What the team added to that shared layer:**
+
+| Change | Member | Why |
+|---|---|---|
+| `fold_to_zero` | Adam (`a51ce41`, #130) | `x*0` yields a constant, not an input — needed a new action shape |
+| `fold_to_one` | Mateusz (`06816dc`, #135) | same, for `x**0` |
+| `POW` in `NumericOpType` | Mateusz (`06816dc`) | representation change; see report §IV-A |
+| `NEGATIVE`, `SUM` in `NumericOpType` | Nicolas | lets matchers key on a type instead of `GENERIC` + a function object |
+| `innermost_first` on `match_two_op_chain` | Nicolas | odd-length involution chains; opt-in so idempotent rewrites are unaffected |
+| `_is_scalar_const` widened to `numbers.Real` | Nicolas | numpy scalar constants were silently skipped by *every* identity rewrite |
+
+The last two are the cases where a change to a shared helper affected rewrites
+other than the one motivating it — the merge-conflict surface described in
+report §IV-C.
+
+## Environment
+
+`devbox.json` / `pyproject.toml` (nix-provided `lightgbm`/`xgboost`) — Nicolas.
