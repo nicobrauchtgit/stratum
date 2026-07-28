@@ -31,8 +31,11 @@ here from the team's individual branches.
   `eliminate_add_zero`.
 - **`exp(x)-1 → expm1(x)`** — upstream PR #121.
   `match_exp_minus_one` + `_replace_with_expm1`.
-- **`0/x → 0`** — PR #154. Opt-in, since `0/0` is `NaN` and folding skips
-  evaluation of the divisor.
+- **`0/x → 0`** — upstream PR #154 / fork PR #12. `match_zero_div` +
+  `fold_to_zero`. **Opt-in** (`zero_div=False`): the identity holds only for a
+  non-zero, non-NaN divisor, and folding additionally skips evaluating the
+  divisor. His follow-up commit added the divergence tests that pin both cases.
+  Integrated onto this base by Nicolas; the code and tests are Aiman's.
 - Tests: `stratum/tests/logical_optimizer/algebraic_rewrites/test_numeric.py`
   (abs/add-zero/expm1 cases).
 

@@ -6,6 +6,7 @@ x+0 -> x                        2       1    1  yes
 x-0 -> x                        2       1    1  yes
 x/1 -> x                        2       1    1  yes
 x**1 -> x                       2       1    1  yes
+0/x -> 0 (opt-in)               2       1    1  yes
 x-x -> 0                        2       1    1  yes
 x**0 -> 1                       2       1    1  yes
 neg(neg(x)) -> x                3       1    2  yes
@@ -18,4 +19,4 @@ const fold log(1)->0            2       1    1  yes
 select c1[c2] fuse              3       2    1  yes
 drop;drop fuse                  3       2    1  yes
 -------------------------------------------------------
-TOTAL (isolated)               44      24   20
+TOTAL (isolated)               46      25   21
