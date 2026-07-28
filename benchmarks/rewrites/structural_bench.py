@@ -32,6 +32,7 @@ CASES = [
     ("x-0 -> x",            "identity_subtract",  lambda: st.as_data_op(7) - 0,                                   False, False),
     ("x/1 -> x",            "div_by_one",         lambda: st.as_data_op(7) / 1,                                   False, False),
     ("x**1 -> x",           "pow_by_one",         lambda: st.as_data_op(7) ** 1,                                  False, False),
+    ("x-x -> 0",            "self_subtract",      lambda: (lambda v: v - v)(st.as_data_op(7)),     False, False),
     ("x**0 -> 1",           "pow_zero",           lambda: st.as_data_op(7) ** 0,                                  False, False),
     ("neg(neg(x)) -> x",    "neg_neg",            lambda: st.as_data_op(7).skb.apply_func(np.negative).skb.apply_func(np.negative), False, False),
     ("abs(abs(x)) -> abs",  "abs_abs",            lambda: st.as_data_op(-7).skb.apply_func(np.abs).skb.apply_func(np.abs), False, False),
