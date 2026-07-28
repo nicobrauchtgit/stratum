@@ -10,6 +10,7 @@ from stratum.optimizer._numeric_rewrites import (
     eliminate_add_zero,
     eliminate_exp_minus_one,
     eliminate_pow_zero,
+    eliminate_zero_div,
     eliminate_identity_subtract,
     eliminate_self_subtract,
     eliminate_any_mul_zero,
@@ -41,6 +42,9 @@ class AlgebraicRewritesConfig:
     add_zero: bool = True
     exp_minus_one: bool = True
     pow_zero: bool = True
+    # opt-in: 0/x is 0 only for non-zero, non-NaN x. Folding also skips
+    # evaluation of the divisor entirely. See tests for the divergent cases.
+    zero_div: bool = False
     identity_subtract: bool = True
     self_subtract: bool = True
     any_mul_zero: bool = True
@@ -68,6 +72,8 @@ def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
         root = eliminate_div_by_one(root)
     if config.pow_by_one:
         root = eliminate_pow_by_one(root)
+    if config.zero_div:
+        root = eliminate_zero_div(root)
     if config.log_exp:
         root = eliminate_log_exp(root)
     if config.exp_log:
