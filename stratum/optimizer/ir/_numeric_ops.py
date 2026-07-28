@@ -1,4 +1,5 @@
 from stratum.optimizer.ir._ops import BinOp, CallOp, Op, OperandRef
+import numbers
 import operator
 import numpy as np
 from enum import Enum
@@ -12,6 +13,11 @@ class NumericOpType(Enum):
     SQUARE = "square"
     LOG1P = "log1p"
     EXPM1 = "expm1"
+    NEGATIVE = "negative"
+    # A reduction, not an elementwise op: unlike every other member here, SUM's
+    # args/kwargs (axis, keepdims, dtype) change its result, so its `process`
+    # branch must forward them. See the note in `NumericOp.process`.
+    SUM = "sum"
     ADD = "add"
     SUBTRACT = "subtract"
     MULTIPLY = "multiply"
@@ -42,6 +48,8 @@ _NUMPY_UNARY_MAP = {
     np.square: NumericOpType.SQUARE,
     np.log1p: NumericOpType.LOG1P,
     np.expm1: NumericOpType.EXPM1,
+    np.negative: NumericOpType.NEGATIVE,
+    np.sum: NumericOpType.SUM,
 }
 
 _UNARY_NUMPY_FUNCS = frozenset(_NUMPY_UNARY_MAP.keys())
@@ -94,6 +102,13 @@ class NumericOp(Op):
             return np.log1p(inputs[0])
         elif self.type == NumericOpType.EXPM1:
             return np.expm1(inputs[0])
+        elif self.type == NumericOpType.NEGATIVE:
+            return np.negative(inputs[0])
+        elif self.type == NumericOpType.SUM:
+            # Forwards args/kwargs, unlike the elementwise branches above. `axis`,
+            # `keepdims` and `dtype` change the result, so dropping them would
+            # silently turn `np.sum(x, axis=0)` into a whole-array sum.
+            return np.sum(inputs[0], *self.args, **self.kwargs)
         elif self.type in _BINARY_TYPES:
             # The primary operand is always input 0 (bound first); the optional
             # second operand is referenced explicitly so x op x (single edge) works.
@@ -143,7 +158,11 @@ def make_binary_numeric_op(op: CallOp, type: NumericOpType) -> NumericOp:
 
 def extract_numeric_op(op: Op, root: Op) -> tuple[Op, bool]:
     new_op = None
-    if isinstance(op, BinOp) and op.op is operator.pow and op.right == 2:
+    # `isinstance` before `== 2`: an ndarray exponent (`df ** np.array([...])`) makes
+    # `op.right == 2` an elementwise array, which raises "truth value of an array is
+    # ambiguous" in this boolean context.
+    if (isinstance(op, BinOp) and op.op is operator.pow
+            and isinstance(op.right, numbers.Real) and op.right == 2):
         new_op = NumericOp(func=np.square, args=(), kwargs={}, inputs=op.inputs, outputs=op.outputs)
     elif isinstance(op, BinOp) and op.op in _ARITH_OP_MAP:
         l_ph = isinstance(op.left, OperandRef)

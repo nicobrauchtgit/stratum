@@ -1,0 +1,25 @@
+========================================================================
+PHASE-ORDERING STUDY (final DAG op-count vs pass order)
+========================================================================
+
+### abs( abs(x) * 1 )   [identity_op enables abs_abs]
+    passes ['identity_op', 'abs_abs']: distinct final op-counts across 2 orders = [2, 3] | fixpoint = 2
+    ORDER-SENSITIVE: YES
+      best  2 ops: identity_op -> abs_abs
+      worst 3 ops: abs_abs -> identity_op  (missed rewrite: an enabling pass ran too late)
+
+### neg( neg(x) + 0 )   [add_zero enables neg_neg]
+    passes ['add_zero', 'neg_neg']: distinct final op-counts across 2 orders = [1, 3] | fixpoint = 1
+    ORDER-SENSITIVE: YES
+      best  1 ops: add_zero -> neg_neg
+      worst 3 ops: neg_neg -> add_zero  (missed rewrite: an enabling pass ran too late)
+
+### abs( abs(x*1) * 1 ) [identity enables abs_abs, deeper]
+    passes ['identity_op', 'abs_abs']: distinct final op-counts across 2 orders = [2, 3] | fixpoint = 2
+    ORDER-SENSITIVE: YES
+      best  2 ops: identity_op -> abs_abs
+      worst 3 ops: abs_abs -> identity_op  (missed rewrite: an enabling pass ran too late)
+
+### (x/1)**1 then neg(neg)  [disjoint patterns]
+    passes ['div_by_one', 'pow_by_one', 'neg_neg']: distinct final op-counts across 6 orders = [1] | fixpoint = 1
+    ORDER-SENSITIVE: no
