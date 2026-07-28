@@ -1,0 +1,49 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
+  "packages": {
+    "python":   "3.12",
+    "uv":       "latest",
+    "rustup":   "latest",
+    "graphviz": "latest",
+    "llvmPackages.openmp": {
+      "version":   "latest",
+      "platforms": ["aarch64-darwin", "x86_64-darwin"]
+    },
+    "python312Packages.lightgbm": "latest",
+    "python312Packages.xgboost":  "latest"
+  },
+  "env": {
+    "VIRTUAL_ENV":                "$PWD/.venv",
+    "PATH":                       "$PWD/.venv/bin:$PWD/.devbox/cargo/bin:$PATH",
+    "RUSTUP_HOME":                "$PWD/.devbox/rustup",
+    "CARGO_HOME":                 "$PWD/.devbox/cargo"
+  },
+  "shell": {
+    "init_hook": [
+      "rustup default stable >/dev/null 2>&1 || rustup toolchain install stable --profile minimal",
+      "if [ ! -d .venv ]; then uv venv --python 3.12; fi",
+      "echo \"$PWD/.devbox/nix/profile/default/lib/python3.12/site-packages\" > .venv/lib/python3.12/site-packages/_nix_packages.pth"
+    ],
+    "scripts": {
+      "install": [
+        "if [ ! -x .venv/bin/python ]; then uv venv --python 3.12; fi",
+        "uv pip install maturin",
+        "(cd _rust && uv run maturin develop --release)",
+        "uv sync --extra test",
+        "echo \"$PWD/.devbox/nix/profile/default/lib/python3.12/site-packages\" > .venv/lib/python3.12/site-packages/_nix_packages.pth"
+      ],
+      "build": [
+        "(cd _rust && uv run maturin develop --release)"
+      ],
+      "test": [
+        "(cd stratum && uv run pytest -v tests)"
+      ],
+      "test-rewrites": [
+        "(cd stratum && uv run pytest -v tests/logical_optimizer/algebraic_rewrites)"
+      ],
+      "test-cov": [
+        "(cd stratum && uv run pytest -v --cov=stratum --cov-config=../pyproject.toml --cov-branch --cov-report=term-missing tests)"
+      ]
+    }
+  }
+}

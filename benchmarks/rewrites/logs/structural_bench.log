@@ -1,0 +1,20 @@
+rewrite                   ops off  ops on    Δ  fires
+-------------------------------------------------------
+x*1 -> x                        2       1    1  yes
+x*0 -> 0                        2       1    1  yes
+x+0 -> x                        2       1    1  yes
+x-0 -> x                        2       1    1  yes
+x/1 -> x                        2       1    1  yes
+x**1 -> x                       2       1    1  yes
+x**0 -> 1                       2       1    1  yes
+neg(neg(x)) -> x                3       1    2  yes
+abs(abs(x)) -> abs              3       2    1  yes
+exp(x)-1 -> expm1               3       2    1  yes
+log(x+1) -> log1p               3       2    1  yes
+log(sum(exp)) -> lse            4       2    2  yes
+exp/sum(exp)->softmax           4       2    2  yes
+const fold log(1)->0            2       1    1  yes
+select c1[c2] fuse              3       2    1  yes
+drop;drop fuse                  3       2    1  yes
+-------------------------------------------------------
+TOTAL (isolated)               42      23   19

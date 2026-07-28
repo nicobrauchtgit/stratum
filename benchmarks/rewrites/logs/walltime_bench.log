@@ -1,0 +1,40 @@
+/Users/I552342/ProjectsUni/stratum/.venv/lib/python3.12/site-packages/pandas/core/arraylike.py:402: RuntimeWarning: overflow encountered in exp
+  result = getattr(ufunc, method)(*inputs, **kwargs)
+==============================================================================
+SECTION 1 — rewrites OFF vs ON (median of 5)
+==============================================================================
+
+[synthetic-1M]  n=1,000,000
+    redundant identities (x/1,**1,*1,+0,-0,neg-neg) off    11.50ms  on     8.54ms  speedup  1.35x
+    log1p fusion (log(x+1))                    off     8.05ms  on     8.34ms  speedup  0.97x
+    softmax fusion (exp/sum(exp))              off     8.09ms  on     9.45ms  speedup  0.86x
+
+[california-MedInc-20K]  n=20,640
+    redundant identities (x/1,**1,*1,+0,-0,neg-neg) off     7.36ms  on     7.92ms  speedup  0.93x
+    log1p fusion (log(x+1))                    off     3.17ms  on     3.05ms  speedup  1.04x
+    softmax fusion (exp/sum(exp))              off     4.34ms  on     4.24ms  speedup  1.02x
+
+[covtype-Elevation-581K]  n=581,012
+    redundant identities (x/1,**1,*1,+0,-0,neg-neg) off    16.46ms  on    10.99ms  speedup  1.50x
+    log1p fusion (log(x+1))                    off     9.07ms  on     8.77ms  speedup  1.03x
+    softmax fusion (exp/sum(exp))              off    16.93ms  on    19.95ms  speedup  0.85x
+
+==============================================================================
+SECTION 2 — PHASE ORDERING on end-to-end runtime (median of 5)
+  pipeline: abs( abs(x)*1 )  -- identity_op must run BEFORE abs_abs
+==============================================================================
+
+[synthetic-1M]  n=1,000,000
+    good order (identity->abs_abs):     8.75ms  (2 ops)
+    bad  order (abs_abs->identity):     9.45ms  (3 ops)   penalty 1.08x
+    fixpoint (repeat to converge):      9.64ms  (2 ops)
+
+[california-MedInc-20K]  n=20,640
+    good order (identity->abs_abs):     7.76ms  (2 ops)
+    bad  order (abs_abs->identity):     7.87ms  (3 ops)   penalty 1.01x
+    fixpoint (repeat to converge):      8.93ms  (2 ops)
+
+[covtype-Elevation-581K]  n=581,012
+    good order (identity->abs_abs):     7.42ms  (2 ops)
+    bad  order (abs_abs->identity):     7.92ms  (3 ops)   penalty 1.07x
+    fixpoint (repeat to converge):      7.92ms  (2 ops)

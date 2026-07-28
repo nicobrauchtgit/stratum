@@ -1,0 +1,15 @@
+==================================================================
+MEMORY: peak RSS + intermediate count, OFF vs ON  (N=20,000,000)
+==================================================================
+
+redundant-identities
+    ops: off 7 -> on 1   (intermediates removed: 6)
+    peak RSS: off  1615.4 MB   on  1310.3 MB   saved  305.1 MB
+
+softmax
+    ops: off 4 -> on 2   (intermediates removed: 2)
+    peak RSS: off  1005.1 MB   on  1005.0 MB   saved    0.1 MB
+
+log1p
+    ops: off 3 -> on 2   (intermediates removed: 1)
+    peak RSS: off  1005.0 MB   on   852.4 MB   saved  152.6 MB

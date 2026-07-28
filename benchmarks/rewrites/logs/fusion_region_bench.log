@@ -1,0 +1,23 @@
+Fusable-region structure vs batch size
+Question: does CSE (which creates fan-out on shared nodes) shrink the
+regions the meta-fold can fuse?
+
+  CSE OFF
+      N    ops  regions  mean sz  max sz  fusable ops  distinct shapes
+      1     13        2     4.50       6            9                2
+      2     21        3     5.33       7           16                3
+      4     37        5     6.00       7           30                3
+      8     69        9     6.44       7           58                3
+
+  CSE ON 
+      N    ops  regions  mean sz  max sz  fusable ops  distinct shapes
+      1     11        2     4.00       5            8                2
+      2     13        3     3.00       4            9                3
+      4     17        5     2.60       4           13                3
+      8     25        9     2.33       4           21                3
+
+Reading the table:
+  - 'distinct shapes' << 'regions' means a compiled-kernel cache pays off:
+    the same kernel is reused across pipelines in the batch.
+  - if 'mean sz' drops as N grows with CSE on, CSE is fragmenting the
+    regions and the two optimizations partly work against each other.
