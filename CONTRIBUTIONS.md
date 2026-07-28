@@ -3,9 +3,7 @@
 MLMMI SS2026 — Project 03. GitHub handles in brackets.
 
 Authorship below is traceable in `git log` and in the upstream pull requests
-listed per rewrite. Six rewrites were merged into `deem-data/stratum` directly
-and reached this fork through upstream `main`; the remainder were integrated
-here from the team's individual branches.
+listed per rewrite.
 
 ---
 
