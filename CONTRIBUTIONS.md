@@ -16,7 +16,7 @@ here from the team's individual branches.
 | Aiman Al-Hazmi (`aimanalhazmi`) | `abs(abs(x))`, `x+0`, `exp(x)-1 → expm1`, `0/x → 0` | report |
 | Mateusz Tomaszewski (`matit02`) | `x-0`, `x-x → 0`, `x**0 → 1` (+ `POW` enum), `log(sum(exp(x))) → logsumexp`, constant folding | report |
 | Adam Zalwowski (`Sandi077`) | `x*0 → 0`, `log(1+x) → log1p`, `select∘select`, `drop∘drop` | report |
-| Nicolas Kohl (`nicobrauchtgit`) | `x/1`, `x**1`, `-(-x)`, `exp/sum(exp) → softmax` (+ `NEGATIVE`/`SUM` enum) | integration, benchmark suite, report |
+| Nicolas Kohl (`nicobrauchtgit`) | `x/1`, `x**1`, `-(-x)`, `exp/sum(exp) → softmax` (+ `NEGATIVE`/`SUM` enum) | benchmark suite, report |
 
 ---
 
@@ -35,7 +35,6 @@ here from the team's individual branches.
   `fold_to_zero`. **Opt-in** (`zero_div=False`): the identity holds only for a
   non-zero, non-NaN divisor, and folding additionally skips evaluating the
   divisor. His follow-up commit added the divergence tests that pin both cases.
-  Integrated onto this base by Nicolas; the code and tests are Aiman's.
 - Tests: `stratum/tests/logical_optimizer/algebraic_rewrites/test_numeric.py`
   (abs/add-zero/expm1 cases).
 
@@ -45,8 +44,7 @@ here from the team's individual branches.
 - **`x-x → 0`** — PR #161 (issue #160). `match_self_subtract` +
   `eliminate_self_subtract`, folding to a `ValueOp(0.0)` through the existing
   `fold_to_zero` action. Matches only a var-var SUBTRACT whose two operands
-  resolve to the same op. Integrated onto this base by Nicolas; the code is
-  Mateusz's.
+  resolve to the same op.
 - **`x**0 → 1`** — PR #139. `eliminate_pow_zero` + `fold_to_one`.
   **Also added `POW` to `NumericOpType`** (`stratum/optimizer/ir/_numeric_ops.py`),
   the representation change discussed in the report's §IV-A.
@@ -99,10 +97,6 @@ here from the team's individual branches.
   silently skipped. Affects every identity rewrite, not only `x**1`.
 - `isinstance` guard ordered before the `== 2` comparison in
   `extract_numeric_op`, fixing a crash on `df ** np.array([...])`.
-
-**Integration** — reconciling four contributors' branches onto one base,
-including the `POW`/`x**1` and `SUM`/`logsumexp` representation conflicts
-described in report §IV-A and §IV-C.
 
 **Benchmarks** — `benchmarks/rewrites/` (all eight harnesses; see
 `EXPERIMENTS.md`) and the accompanying analysis in `REPORT.md`.
