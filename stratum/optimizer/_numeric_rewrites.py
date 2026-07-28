@@ -1,15 +1,33 @@
+import numbers
 import numpy as np
 import scipy.special as sp
 from stratum.optimizer.ir._numeric_ops import NumericOp, NumericOpType
 from stratum.optimizer._op_utils import rewrite_pass, replace_op_in_outputs
 from stratum.optimizer.ir._ops import Op, ValueOp
-import numpy as np
 
 
-def match_two_op_chain(op_cls, type1, type2):
-    """Match predicate for two consecutive ops of the same class with given types."""
+def match_two_op_chain(op_cls, type1, type2, innermost_first=False):
+    """Match predicate for two consecutive ops of the same class with given types.
+
+    ``innermost_first`` guards self-inverse chains that are collapsed by
+    *elimination* (``eliminate_two_op_chain``): if op1's own input is already a
+    matching op, the match is declined so the inner pair collapses first. Without
+    it, an odd-length chain (n >= 3) matches an overlapping pair and the action
+    rewires through a node the pass has already detached, so
+    ``topological_iterator`` raises "Encountered op ... which should not exist in
+    the DAG".
+
+    Left ``False`` by default: rewrites using a *replacement* action
+    (``make_replace_two_op_chain_root_safe``, e.g. ``abs(abs(x)) -> abs(x)``)
+    consume the chain outermost-first and would stop collapsing entirely under
+    this guard.
+    """
     def match(op):
         if isinstance(op, op_cls) and op.type is type1 and len(op.outputs) == 1:
+            if innermost_first and op.inputs:
+                inner = op.inputs[0]
+                if isinstance(inner, op_cls) and inner.type is type1:
+                    return None  # not the innermost pair
             op2 = op.outputs[0]
             if isinstance(op2, op_cls) and op2.type is type2:
                 return (op, op2)
@@ -59,7 +77,11 @@ def match_identity_operation(op_cls, type1, const, reversed=None):
         if isinstance(op1, op_cls) and op1.type == type1:
             # isinstance guard: an ndarray constant would raise
             # "truth value of an array is ambiguous" on `== const`.
-            if op1.opt_operand is None and isinstance(op1.constant, (int, float)) \
+            # `numbers.Real` rather than `(int, float)` so numpy scalars match:
+            # `df ** np.int64(1)` keeps its exponent as np.int64, which is not an
+            # int subclass and would otherwise skip every identity rewrite.
+            # Real still excludes ndarray and complex, which is what the guard is for.
+            if op1.opt_operand is None and isinstance(op1.constant, numbers.Real) \
                     and op1.constant == const:
                 if reversed is None or op1.reversed == reversed:
                     return (op1,)
@@ -260,7 +282,8 @@ eliminate_div_by_one = rewrite_pass(
 
 
 eliminate_neg_neg = rewrite_pass(
-    match_two_op_chain_by_func(np.negative),
+    match_two_op_chain(NumericOp, NumericOpType.NEGATIVE, NumericOpType.NEGATIVE,
+                       innermost_first=True),
     eliminate_two_op_chain_root_safe,
 )
 
@@ -315,7 +338,7 @@ def _logsumexp(x):
 
 
 def match_log_sum_exp(op):
-    """Match ``EXP -> GENERIC(np.sum) -> LOG`` chain."""
+    """Match ``EXP -> SUM -> LOG`` chain."""
     if not isinstance(op, NumericOp):
         return None
     if op.type is not NumericOpType.EXP:
@@ -326,9 +349,11 @@ def match_log_sum_exp(op):
     op2 = op.outputs[0]
     if not isinstance(op2, NumericOp):
         return None
-    if op2.type is not NumericOpType.GENERIC:
+    if op2.type is not NumericOpType.SUM:
         return None
-    if op2.func is not np.sum:
+    # The type says "a sum", not "a whole-array sum": an axis-aware sum denotes a
+    # different function and must not fuse to the scalar logsumexp.
+    if op2.args or op2.kwargs:
         return None
     if len(op2.outputs) != 1:
         return None
@@ -364,8 +389,7 @@ def match_softmax(op):
     if not (isinstance(numer, NumericOp) and numer.type is NumericOpType.EXP):
         return None
     if not (isinstance(denom, NumericOp)
-            and denom.type is NumericOpType.GENERIC
-            and denom.func is np.sum):
+            and denom.type is NumericOpType.SUM):
         return None
     # Reject axis / keepdims / dtype kwargs — keep the initial scope tight.
     if denom.args or denom.kwargs:

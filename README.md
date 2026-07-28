@@ -1,173 +1,119 @@
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/stratum_logo_dark.png">
-    <img src="docs/repository-card.png" alt="Stratum logo" width="50%">
-  </picture>
-</p>
+# Stratum Optimizer: Rule-Based Rewrites
 
-[![Python CI](https://github.com/deem-data/stratum/actions/workflows/python_tests.yml/badge.svg)](https://github.com/deem-data/stratum/actions/workflows/python_tests.yml)
-[![Rust CI](https://github.com/deem-data/stratum/actions/workflows/rust_tests.yml/badge.svg)](https://github.com/deem-data/stratum/actions/workflows/rust_tests.yml)
-[![codecov](https://codecov.io/gh/deem-data/stratum/graph/badge.svg?token=QQDTC0RXUN)](https://codecov.io/gh/deem-data/stratum)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
+**MLMMI SS2026 — Project 03**
+Aiman Al-Hazmi, Adam Zalwowski, Mateusz Tomaszewski, Nicolas Kohl
+Technische Universität Berlin
 
-**Stratum** is an ML system for efficiently executing **large-scale agentic pipeline search**. It integrates with MLE agents by representing batches of agent-generated pipelines as lazily evaluated DAGs, applying logical and runtime optimizations, and executing them across heterogeneous backends, including a Rust-based runtime.
-Stratum builds on [skrub's](https://skrub-data.org/stable) operator abstraction and is under active development.
+This fork adds **16 rule-based rewrites** to Stratum's logical optimizer, plus a
+reproducible benchmark suite evaluating them. Upstream Stratum's own README is
+preserved as [`README_stratum_upstream.md`](README_stratum_upstream.md).
+
+- **Who wrote what:** [`CONTRIBUTIONS.md`](CONTRIBUTIONS.md)
+- **How to reproduce the numbers:** [`EXPERIMENTS.md`](EXPERIMENTS.md)
+- **Benchmark discussion:** [`benchmarks/rewrites/REPORT.md`](benchmarks/rewrites/REPORT.md)
 
 ---
 
-## Design Principles
+## Quick start
 
-- Provide seamless and unrestricted support for **arbitrary ML libraries** without operator porting.
-- Enable **lazy evaluation** and provide operator semantics that enable logical rewrites and **cost-based** optimizations.
-- Implement a runtime with **efficient operator kernels** (in Rust), scheduling across CPUs, GPUs, and distributed backends, plus runtime optimizations such as **buffer pools, reuse of intermediates, and inter- and intra-operator parallelization**.
+```bash
+devbox run install     # nix env + venv + rust extension
+devbox run test        # full test suite (667 optimizer tests)
+devbox run test-rewrites   # just the rewrite tests
+```
+
+Then any benchmark, e.g.:
+
+```bash
+PYTHONPATH=$PWD .venv/bin/python benchmarks/rewrites/structural_bench.py
+```
+
+> **macOS note.** `lightgbm`/`xgboost` come from **nixpkgs**, not PyPI
+> (`devbox.json`). Their macOS-ARM wheels link `@rpath/libomp.dylib` and search
+> only Homebrew/MacPorts prefixes, so they fail to load in a nix-only
+> environment. `devbox run install` writes a `.pth` file placing the nix builds
+> on the venv path; they are deliberately **absent** from `pyproject.toml`'s
+> `test` extra so `uv sync` cannot shadow them.
 
 ---
 
-## Installation
+## Where our code lives
 
-For now, you need to build stratum from source.
+Everything we wrote is in three places. Nothing else in `stratum/` is ours.
 
-**Requirements:**
-- Python **3.12+**
-- [skrub](https://skrub-data.org/stable/)
-- [Rust toolchain](https://rustup.rs/) (nightly not required; stable is fine)
-- [maturin](https://www.maturin.rs/) (`pip install maturin`)
+### 1. The rewrites — `stratum/optimizer/_numeric_rewrites.py`
 
-From the repository root, install the extension in editable (development) mode:
+Each rewrite is a `(match, action)` pair wired together by `rewrite_pass`.
+A matcher inspects a node and returns the matched ops or `None`; an action
+rewires the DAG and returns the (possibly new) root.
 
-```bash
-maturin develop --release
-```
+| Rewrite | Matcher | Action |
+|---|---|---|
+| `x*1`, `x+0`, `x-0`, `x/1`, `x**1` | `match_identity_operation` | `eliminate_single_op_chain_root_safe` |
+| `x*0 → 0` | `match_identity_operation` | `fold_to_zero` |
+| `x**0 → 1` | `match_identity_operation` | `fold_to_one` |
+| `abs(abs(x))` | `match_two_op_chain` | `make_replace_two_op_chain_root_safe` |
+| `-(-x) → x` | `match_two_op_chain(..., innermost_first=True)` | `eliminate_two_op_chain_root_safe` |
+| `exp(x)-1 → expm1` | `match_exp_minus_one` | replace-with-`EXPM1` |
+| `log(1+x) → log1p` | `match_add_one_then_log` | replace-with-`LOG1P` |
+| `log(sum(exp(x))) → logsumexp` | `match_log_sum_exp` | three-op replace |
+| `exp(x)/sum(exp(x)) → softmax` | `match_softmax` | `replace_with_softmax` |
+| constant folding | `match_constant_foldable` | `eliminate_constant_folding` |
 
-For more details (including building wheels), see the **Developer Instructions** section below.
+Dispatch and feature flags: **`stratum/optimizer/_algebraic_rewrites.py`**
+(`AlgebraicRewritesConfig` — one boolean per rewrite; `constant_folding` is
+opt-in (default `False`) because it pre-empts pattern-rewrite unit tests that
+use constant fixtures).
 
----
+Projection rewrites for dataframe DAGs (`select∘select`, `drop∘drop`) are in
+**`stratum/optimizer/_projection_rewrites.py`**.
 
-## Usage
+### 2. IR changes — `stratum/optimizer/ir/_numeric_ops.py`
 
-To leverage stratum, agent prompts or pipelines need minor changes.
-Prompts should be modified to generate code following [skrub DataOps](https://skrub-data.org/stable/reference/data_ops.html) syntax.
+Three operations were promoted from the `GENERIC` fallthrough into
+`NumericOpType`, so matchers can key on a type instead of a wrapped function
+object: **`POW`**, **`NEGATIVE`** and **`SUM`**.
 
-Stratum can also significantly speed up human-written skrub code.
+`SUM` is the first *reduction* in an otherwise elementwise enum, so its
+`process` branch **forwards `args`/`kwargs`** — the elementwise branches drop
+them, which would silently turn `np.sum(x, axis=0)` into a whole-array sum.
 
-The following flags enable different features of Stratum. These flags can be set via environment variables or directly in code:
+### 3. Benchmarks — `benchmarks/rewrites/`
 
-```python
-import stratum
-
-stratum.set_config(
-    rust_backend=True,
-    scheduler=True,
-    stats=True,
-    debug_timing=False,
-)
-```
-### Example Code
-
-```python
-import stratum as skrub #drop-in replacement
-from sklearn.preprocessing import OneHotEncoder
-from sklearn.linear_model import LinearRegression
-
-def main():
-    dataset = skrub.datasets.fetch_employee_salaries()
-    df = skrub.as_data_op(dataset.employee_salaries).skb.subsample()
-    df_clean = df.dropna()
-    y = df_clean["current_annual_salary"].skb.mark_as_y()
-    X = df_clean.drop(columns=["current_annual_salary"]).skb.mark_as_X()
-
-    skrub.set_config(rust_backend=True, debug_timing=True, scheduler=True, stats=True)
-    tv = skrub.TableVectorizer(high_cardinality=skrub.StringEncoder(), low_cardinality=OneHotEncoder())
-    X_enc = X.skb.apply(tv)
-    print(f"Encoded data shape: {X_enc.shape.skb.preview()}")
-
-    pred = X_enc.skb.apply(LinearRegression(), y=y)
-    search = pred.skb.make_grid_search(cv=3, fitted=True, scoring="r2", refit=False)
-    print(search.results_)
-
-if __name__ == "__main__":
-    main()
-```
----
-
-## Repository Layout
-
-```bash
-stratum/
-├─ pyproject.toml           # Project metadata + Python/Rust build config (maturin)
-├─ README.md
-├─ LICENSE
-├─ _rust/                   # Rust crate (PyO3 extension)
-│  ├─ Cargo.toml
-│  └─ src/lib.rs            # Defines #[pymodule] fn _rust_backend_native(...)
-└─ stratum/                 # Python package
-   ├─ __init__.py           # Façade over skrub + automatic patching
-   ├─ _config.py            # set_config/get_config + runtime/env sync
-   ├─ _api.py               # High-level grid search / evaluate helpers
-   ├─ _rust_backend.py      # Python <-> Rust shim (re-exports native fns)
-   ├─ adapters/             # Public API (dispatch to Rust or fall back to skrub)
-   │  ├─ string_encoder.py  # RustyStringEncoder
-   │  └─ one_hot_encoder.py # RustyOneHotEncoder
-   ├─ optimizer/
-   │  ├─ ir/                # DAG representation 
-   │  └─ _optimize.py       # logical rewrites
-   ├─ runtime/              # Schedulers and runtime execution
-   ├─ patching/             # Hooks that patch upstream skrub
-   └─ tests/                # Test suite
-```
----
-
-## Developer Instructions
-
-### Running the Tests
-
-Install all extras and run the full test suite:
-
-```bash
-uv sync --all-extras
-pytest -v stratum/tests
-```
-
-Or, more concisely:
-
-```bash
-uv run pytest
-```
+Eight harnesses; see [`EXPERIMENTS.md`](EXPERIMENTS.md) for what each measures
+and how to run it, and `benchmarks/rewrites/logs/` for captured output.
 
 ---
 
-## Local Dev Install (Editable, without `uv`)
+## Headline findings
 
-```bash
-maturin develop				# Debug mode
-maturin develop --release	# Optimized dev build
-```
+| Question | Answer |
+|---|---|
+| Do the rewrites fire? | All 16, −19 operations in isolation (Table I) |
+| Do they speed things up? | Eliminations up to **1.35×**; fusions ≈1.0× |
+| Then why fuse? | **Stability**: naive softmax/logsumexp overflow to `NaN`; naive `log1p`/`expm1` lose ~4 digits |
+| Does order matter? | Yes — one rewrite enables another; a bad order leaves 3 ops where 2 suffice |
+| What would give real speedup? | Single-pass fused kernels: **7.8×** and 2–3× less peak memory at 10M rows |
+| Does it help on batches? | Partly — CSE does the bulk; our rewrites remove a further 12 of 33 ops on top of it |
 
-#### Building Wheels
-
-This produces redistributable `.whl` files under `dist/`.
-
-```bash
-# Linux / macOS
-maturin build --release -o dist --interpreter python3.10 --compatibility linux
-
-# Windows
-maturin build --release -o dist
-```
-Then install with:
-
-```bash
-pip install ./dist/stratum-*.whl
-```
+A negative result worth stating: **CSE shrinks the regions a fused kernel could
+absorb** (mean 6.44 → 2.33 operators at 8 pipelines), because deduplicated nodes
+gain multiple consumers and can no longer be fused away. A batch-oriented kernel
+should therefore target *shared intermediates*, not long chains.
 
 ---
 
-## License
-Apache License 2.0. See [LICENSE](LICENSE) for details.
+## Testing
 
+```bash
+devbox run test            # 667 passed
+devbox run test-rewrites   # rewrite tests only
+```
 
+Every rewrite ships tests for: it fires; it does *not* fire on near-misses
+(`1/x`, `x**2`, `1**x`, mixed `abs`/`neg` chains, ndarray constants); a `False`
+flag disables it; behaviour on chains, fan-out and NaN; and end-to-end numeric
+equivalence against the unoptimised pipeline.
 
-
-
-
+Five failures in `tests/adapters/` are pre-existing and unrelated — they assert
+Rust kernels are selected and require `maturin develop` to have been run.

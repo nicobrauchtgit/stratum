@@ -43,8 +43,12 @@ test = [
     "pytest>=9.0.3",
     "pytest-cov",
     "coverage[toml]",
-    "lightgbm>=4.6.0",
-    "xgboost>=3.1.1",
+    # lightgbm/xgboost come from nix (see devbox.json: python312Packages.*), not
+    # from PyPI. The macOS ARM wheels link @rpath/libomp.dylib and only search
+    # Homebrew/MacPorts prefixes, so they fail to load in a nix-only environment.
+    # The nix builds are linked against nix's own openmp and work out of the box;
+    # a .pth file written by devbox's init_hook puts them on the venv's path.
+    # Installing the wheels here would shadow the working nix packages.
 ]
 benchmark = [
     "psutil>=7.2"
