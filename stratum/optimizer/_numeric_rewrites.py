@@ -154,6 +154,23 @@ def match_exp_minus_one(op):
     return None
 
 
+def match_self_subtract(op):
+    """Match ``x - x`` where both operands reference the same input.
+
+    The SUBTRACT must be var-var (``opt_operand is not None``) and both the
+    primary operand and the referenced operand must resolve to the same op.
+    """
+    if not isinstance(op, NumericOp):
+        return None
+    if op.type is not NumericOpType.SUBTRACT:
+        return None
+    if op.opt_operand is None:
+        return None
+    if op.inputs[0] is op.inputs[op.opt_operand.k]:
+        return (op,)
+    return None
+
+
 def fold_to_zero(op: Op, root: Op) -> Op:
     """Constant-fold ``x * 0`` (or ``0 * x``) to ``0``.
 
@@ -267,6 +284,11 @@ eliminate_exp_minus_one = rewrite_pass(match_exp_minus_one, _replace_with_expm1)
 eliminate_identity_subtract = rewrite_pass(
     match_identity_operation(NumericOp, NumericOpType.SUBTRACT, 0, reversed=False),
     eliminate_single_op_chain_root_safe,
+)
+
+eliminate_self_subtract = rewrite_pass(
+    match_self_subtract,
+    fold_to_zero,
 )
 
 
