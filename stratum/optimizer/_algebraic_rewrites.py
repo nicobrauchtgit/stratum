@@ -11,6 +11,7 @@ from stratum.optimizer._numeric_rewrites import (
     eliminate_exp_minus_one,
     eliminate_pow_zero,
     eliminate_identity_subtract,
+    eliminate_self_subtract,
     eliminate_any_mul_zero,
     eliminate_div_by_one,
     eliminate_pow_by_one,
@@ -41,6 +42,7 @@ class AlgebraicRewritesConfig:
     exp_minus_one: bool = True
     pow_zero: bool = True
     identity_subtract: bool = True
+    self_subtract: bool = True
     any_mul_zero: bool = True
     div_by_one: bool = True
     pow_by_one: bool = True
@@ -84,6 +86,8 @@ def algebraic_rewrites(root: Op, config: AlgebraicRewritesConfig) -> Op:
         root = eliminate_identity_subtract(root)
     if config.pow_zero:
         root = eliminate_pow_zero(root)
+    if config.self_subtract:
+        root = eliminate_self_subtract(root)
     if config.any_mul_zero:
         root = eliminate_any_mul_zero(root)
     if config.neg_neg:

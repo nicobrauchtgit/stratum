@@ -54,7 +54,7 @@ For each rewrite, builds a pipeline that triggers it and counts DAG operations
 with that rewrite off, then on (everything else disabled). No dataset needed;
 fully deterministic.
 
-**Result:** all 16 fire; 42 → 23 operations, i.e. **−19 in isolation**.
+**Result:** all 17 fire; 44 → 24 operations, i.e. **−20 in isolation**.
 
 ### `order_bench.py` → report §IV-B
 
